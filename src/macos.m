@@ -609,3 +609,52 @@ const CFStringRef wioHIDSerialNumberKey = CFSTR(kIOHIDSerialNumberKey);
 const CFStringRef wioHIDProductKey = CFSTR(kIOHIDProductKey);
 
 #endif
+
+static NSScreen *wioGetScreen(CGDirectDisplayID displayId) {
+    for (NSScreen *screen in [NSScreen screens]) {
+        NSNumber *number = [[screen deviceDescription] objectForKey:@"NSScreenNumber"];
+        if ([number unsignedIntValue] == displayId) return screen;
+    }
+    return nil;
+}
+
+uint32_t wioGetDisplayCount(void) {
+    return (uint32_t)[[NSScreen screens] count];
+}
+
+uint32_t wioGetDisplayIds(CGDirectDisplayID *ids, uint32_t maxCount) {
+    NSArray<NSScreen *> *screens = [NSScreen screens];
+    uint32_t count = (uint32_t)MIN([screens count], maxCount);
+    for (uint32_t i = 0; i < count; ++i) {
+        NSNumber *number = [[screens[i] deviceDescription] objectForKey:@"NSScreenNumber"];
+        ids[i] = [number unsignedIntValue];
+    }
+    return count;
+}
+
+uint8_t wioGetDisplayBounds(CGDirectDisplayID displayId, int32_t *x, int32_t *y, uint32_t *width, uint32_t *height) {
+    NSScreen *screen = wioGetScreen(displayId);
+    if (!screen) return 0;
+    NSRect frame = [screen frame];
+    *x = (int32_t)frame.origin.x;
+    *y = (int32_t)frame.origin.y;
+    *width = (uint32_t)frame.size.width;
+    *height = (uint32_t)frame.size.height;
+    return 1;
+}
+
+uint8_t wioGetDisplayUsableBounds(CGDirectDisplayID displayId, int32_t *x, int32_t *y, uint32_t *width, uint32_t *height) {
+    NSScreen *screen = wioGetScreen(displayId);
+    if (!screen) return 0;
+    NSRect frame = [screen visibleFrame];
+    *x = (int32_t)frame.origin.x;
+    *y = (int32_t)frame.origin.y;
+    *width = (uint32_t)frame.size.width;
+    *height = (uint32_t)frame.size.height;
+    return 1;
+}
+
+double wioGetDisplayContentScale(CGDirectDisplayID displayId) {
+    NSScreen *screen = wioGetScreen(displayId);
+    return screen ? [screen backingScaleFactor] : 0.0;
+}

@@ -88,6 +88,7 @@ pub fn build(b: *std.Build) !void {
             }
 
             module.linkFramework("Cocoa", .{});
+            module.linkFramework("CoreVideo", .{});
             if (enable_vulkan) {
                 module.linkFramework("QuartzCore", .{});
             }

@@ -682,3 +682,11 @@ fn assertFeature(feature: anytype) void {
         @compileError("feature '" ++ @tagName(feature) ++ "' is disabled");
     }
 }
+
+const display = @import("display.zig");
+
+pub const Bounds = display.Bounds;
+pub const RefreshRate = display.RefreshRate;
+pub const DisplayMode = display.DisplayMode;
+pub const DisplayIterator = display.DisplayIterator;
+pub const Display = display.Display;
