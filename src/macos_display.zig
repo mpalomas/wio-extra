@@ -71,7 +71,7 @@ pub const Display = struct {
 };
 
 fn getBoundsWith(
-    comptime func: *const fn (c.CGDirectDisplayID, *i32, *i32, *u32, *u32) u8,
+    comptime func: *const fn (c.CGDirectDisplayID, *i32, *i32, *u32, *u32) callconv(.c) u8,
     id: c.CGDirectDisplayID,
 ) ?types.Bounds {
     var x: i32 = undefined;
