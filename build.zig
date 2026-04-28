@@ -73,6 +73,8 @@ pub fn build(b: *std.Build) !void {
             if (enable_opengl) {
                 module.linkSystemLibrary("opengl32", .{});
             }
+            // required by display API
+            module.linkSystemLibrary("shcore", .{});
             if (enable_joystick) {
                 module.linkSystemLibrary("hid", .{});
                 module.linkSystemLibrary(if (target.result.cpu.arch.isX86()) "xinput9_1_0" else "xinput1_4", .{});

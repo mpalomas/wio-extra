@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 
 const backend = switch (builtin.os.tag) {
     .macos => @import("macos_display.zig"),
+    .windows => @import("win32_display.zig"),
     else => @import("display_stub.zig"),
 };
 
