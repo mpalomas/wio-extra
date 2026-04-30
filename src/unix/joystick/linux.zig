@@ -205,6 +205,18 @@ pub const JoystickDevice = struct {
         name_len -= 1; // null terminator
         return allocator.dupe(u8, name[0..name_len]);
     }
+
+    pub fn getInfo(self: JoystickDevice) ?wio.JoystickInfo {
+        var info: h.input_id = undefined;
+        if (std.os.linux.ioctl(self.fd, h.EVIOCGID, @intFromPtr(&info)) != 0) return null;
+        return .{
+            .backend = .linux_evdev,
+            .bus = info.bustype,
+            .vendor = info.vendor,
+            .product = info.product,
+            .version = info.version,
+        };
+    }
 };
 
 pub const Joystick = struct {

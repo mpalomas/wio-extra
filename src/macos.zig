@@ -522,6 +522,27 @@ pub const JoystickDevice = struct {
     pub fn getName(self: JoystickDevice, allocator: std.mem.Allocator) ![]u8 {
         return cfStringToUtf8(allocator, @ptrCast(c.IOHIDDeviceGetProperty(self.device, wioHIDProductKey)));
     }
+
+    pub fn getInfo(self: JoystickDevice) ?wio.JoystickInfo {
+        const vendor_cf = c.IOHIDDeviceGetProperty(self.device, wioHIDVendorIDKey) orelse return null;
+        const product_cf = c.IOHIDDeviceGetProperty(self.device, wioHIDProductIDKey) orelse return null;
+        const version_cf = c.IOHIDDeviceGetProperty(self.device, wioHIDVersionNumberKey) orelse return null;
+
+        var vendor: u32 = undefined;
+        _ = c.CFNumberGetValue(@ptrCast(vendor_cf), c.kCFNumberSInt32Type, &vendor);
+        var product: u32 = undefined;
+        _ = c.CFNumberGetValue(@ptrCast(product_cf), c.kCFNumberSInt32Type, &product);
+        var version: u32 = undefined;
+        _ = c.CFNumberGetValue(@ptrCast(version_cf), c.kCFNumberSInt32Type, &version);
+
+        return .{
+            .backend = .macos_iokit,
+            .bus = 0x03,
+            .vendor = @intCast(vendor),
+            .product = @intCast(product),
+            .version = @intCast(version),
+        };
+    }
 };
 
 pub const Joystick = struct {

@@ -33,6 +33,10 @@ pub const JoystickDevice = struct {
     pub fn getName(_: JoystickDevice, _: std.mem.Allocator) ![]u8 {
         return error.Unexpected;
     }
+
+    pub fn getInfo(_: JoystickDevice) ?wio.JoystickInfo {
+        return null;
+    }
 };
 
 pub const Joystick = struct {

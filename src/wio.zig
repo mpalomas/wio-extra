@@ -2,6 +2,26 @@ const std = @import("std");
 const builtin = @import("builtin");
 pub const build_options = @import("build_options");
 const internal = @import("wio.internal.zig");
+pub const gamepad = @import("gamepad.zig");
+
+pub const JoystickBackend = enum {
+    linux_evdev,
+    windows_rawinput,
+    windows_xinput,
+    macos_iokit,
+    wasm_web,
+    haiku,
+    unknown,
+};
+
+pub const JoystickInfo = struct {
+    backend: JoystickBackend,
+    bus: ?u16 = null,
+    vendor: ?u16 = null,
+    product: ?u16 = null,
+    version: ?u16 = null,
+};
+
 pub const backend = switch (builtin.os.tag) {
     .windows => @import("win32.zig"),
     .macos => @import("macos.zig"),
@@ -369,6 +389,10 @@ pub const JoystickDevice = struct {
     /// Returns "" on error.
     pub fn getName(self: JoystickDevice, allocator: std.mem.Allocator) []u8 {
         return self.backend.getName(allocator) catch "";
+    }
+
+    pub fn getInfo(self: JoystickDevice) ?JoystickInfo {
+        return self.backend.getInfo();
     }
 };
 

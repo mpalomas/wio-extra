@@ -45,6 +45,21 @@ pub fn build(b: *std.Build) !void {
     options.addOption(bool, "system_integration", system_integration);
     module.addOptions("build_options", options);
 
+    const test_module = b.createModule(.{
+        .root_source_file = b.path("src/gamepad.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_module.addOptions("build_options", options);
+
+    const tests = b.addTest(.{
+        .root_module = test_module,
+    });
+
+    const run_tests = b.addRunArtifact(tests);
+    const test_step = b.step("test", "Run gamepad layer tests");
+    test_step.dependOn(&run_tests.step);
+
     if (enable_drop) module.addCMacro("WIO_DROP", "");
     if (enable_framebuffer) module.addCMacro("WIO_FRAMEBUFFER", "");
     if (enable_opengl) module.addCMacro("WIO_OPENGL", "");

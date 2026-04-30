@@ -291,6 +291,12 @@ pub const JoystickDevice = struct {
     pub fn getName(self: JoystickDevice, allocator: std.mem.Allocator) ![]u8 {
         return self.getId(allocator);
     }
+
+    pub fn getInfo(_: JoystickDevice) ?wio.JoystickInfo {
+        return .{
+            .backend = .wasm_web,
+        };
+    }
 };
 
 pub const Joystick = struct {

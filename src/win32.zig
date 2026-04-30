@@ -830,6 +830,25 @@ pub const JoystickDevice = union(enum) {
             .xinput => return allocator.dupe(u8, "Xbox Controller"),
         }
     }
+
+    pub fn getInfo(self: JoystickDevice) ?wio.JoystickInfo {
+        switch (self) {
+            .rawinput => |device| {
+                const info = joysticks.get(device) orelse return null;
+                return .{
+                    .backend = .windows_rawinput,
+                    .bus = 0x03,
+                    .vendor = parseInterfaceHex(info.interface, w.L("VID_")),
+                    .product = parseInterfaceHex(info.interface, w.L("PID_")),
+                    .version = parseInterfaceHex(info.interface, w.L("REV_")),
+                };
+            },
+            .xinput => return .{
+                .backend = .windows_xinput,
+                .bus = 0x03,
+            },
+        }
+    }
 };
 
 pub const Joystick = union(enum) {
@@ -934,6 +953,28 @@ const XInputJoystick = struct {
         return .{ .axes = &self.axes, .hats = &self.hats, .buttons = &self.buttons };
     }
 };
+
+fn parseInterfaceHex(interface: []const u16, prefix: []const u16) ?u16 {
+    const start = std.mem.indexOf(u16, interface, prefix) orelse return null;
+    const hex_start = start + prefix.len;
+    if (hex_start + 4 > interface.len) return null;
+
+    var value: u16 = 0;
+    for (interface[hex_start .. hex_start + 4]) |code_unit| {
+        const digit = parseHexNibble(code_unit) orelse return null;
+        value = (value << 4) | digit;
+    }
+    return value;
+}
+
+fn parseHexNibble(char: u16) ?u16 {
+    return switch (char) {
+        '0'...'9' => char - '0',
+        'a'...'f' => char - 'a' + 10,
+        'A'...'F' => char - 'A' + 10,
+        else => null,
+    };
+}
 
 pub const AudioDeviceIterator = struct {
     devices: ?*w.IMMDeviceCollection = null,
