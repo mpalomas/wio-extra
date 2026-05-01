@@ -106,6 +106,11 @@ pub const IdentifyError = error{
     MissingDeviceId,
 };
 
+pub const RuntimeError = error{
+    NoMapping,
+    OpenFailed,
+};
+
 pub const Input = union(enum) {
     button: usize,
     axis: struct {
@@ -151,7 +156,7 @@ pub const Mapping = struct {
     }
 
     pub fn matchesId(self: *const Mapping, id: []const u8) bool {
-        return std.mem.eql(u8, self.guid, id) or std.mem.eql(u8, self.guid, "xinput");
+        return std.mem.eql(u8, self.guid, id);
     }
 
     pub fn mapState(self: *const Mapping, raw: anytype) GamepadState {
@@ -179,7 +184,7 @@ pub const Database = struct {
         errdefer mapping.deinit(allocator);
 
         for (self.mappings.items) |*existing| {
-            if (std.mem.eql(u8, existing.guid, mapping.guid)) {
+            if (std.mem.eql(u8, existing.guid, mapping.guid) and existing.crc == mapping.crc) {
                 existing.deinit(allocator);
                 existing.* = mapping;
                 return;
@@ -202,8 +207,51 @@ pub const Database = struct {
     }
 
     pub fn findGuid(self: *const Database, guid: []const u8) ?*const Mapping {
+        if (std.mem.eql(u8, guid, "xinput")) {
+            for (self.mappings.items) |*mapping| {
+                if (mapping.matchesId(guid)) return mapping;
+            }
+            return null;
+        }
+
+        const guid_bytes = parseGuidBytes(guid) orelse {
+            for (self.mappings.items) |*mapping| {
+                if (mapping.matchesId(guid)) return mapping;
+            }
+            return null;
+        };
+
+        if (self.findGuidBytes(guid_bytes, true, true)) |mapping| return mapping;
+        if (self.findGuidBytes(guid_bytes, true, false)) |mapping| return mapping;
+
+        if (guidUsesVersion(guid_bytes)) {
+            if (self.findGuidBytes(guid_bytes, false, true)) |mapping| return mapping;
+            if (self.findGuidBytes(guid_bytes, false, false)) |mapping| return mapping;
+        }
+
+        return null;
+    }
+
+    fn findGuidBytes(self: *const Database, guid: [16]u8, match_version: bool, exact_match_crc: bool) ?*const Mapping {
+        var match_guid = guid;
+        const crc = guidCrc(match_guid);
+        clearGuidCrc(&match_guid);
+        if (!match_version) clearGuidVersion(&match_guid);
+
         for (self.mappings.items) |*mapping| {
-            if (mapping.matchesId(guid)) return mapping;
+            var mapping_guid = parseGuidBytes(mapping.guid) orelse continue;
+            clearGuidCrc(&mapping_guid);
+            if (!match_version) clearGuidVersion(&mapping_guid);
+
+            if (std.mem.eql(u8, &match_guid, &mapping_guid)) {
+                if (mapping.crc) |mapping_crc| {
+                    if (mapping_crc != crc) continue;
+                    return mapping;
+                }
+
+                if (crc != 0 and exact_match_crc) continue;
+                return mapping;
+            }
         }
         return null;
     }
@@ -220,6 +268,39 @@ pub const DeviceIdentity = struct {
         allocator.free(self.name);
         allocator.free(self.sdl_guid);
         self.* = undefined;
+    }
+};
+
+pub const GamepadDevice = struct {
+    identity: DeviceIdentity,
+    mapping: *const Mapping,
+    joystick: wio.Joystick,
+
+    /// The `Database` used here must outlive the returned handle because the
+    /// selected mapping is borrowed, not copied.
+    pub fn open(allocator: std.mem.Allocator, device: wio.JoystickDevice, db: *const Database) !GamepadDevice {
+        var identity = try identifyDevice(allocator, device);
+        errdefer identity.deinit(allocator);
+
+        const mapping = db.findGuid(identity.sdl_guid) orelse return RuntimeError.NoMapping;
+        const joystick = device.open() orelse return RuntimeError.OpenFailed;
+
+        return .{
+            .identity = identity,
+            .mapping = mapping,
+            .joystick = joystick,
+        };
+    }
+
+    pub fn deinit(self: *GamepadDevice, allocator: std.mem.Allocator) void {
+        self.joystick.close();
+        self.identity.deinit(allocator);
+        self.* = undefined;
+    }
+
+    pub fn poll(self: *GamepadDevice) ?GamepadState {
+        const raw = self.joystick.poll() orelse return null;
+        return self.mapping.mapState(raw);
     }
 };
 
@@ -324,20 +405,20 @@ fn createSdlGuidString(allocator: std.mem.Allocator, info: ?wio.JoystickInfo, na
                 else => sdl_bus_unknown,
             };
             writeLe16(guid[0..2], bus);
+            writeLe16(guid[2..4], raw.guid_crc orelse sdlCrc16(0, name));
             writeLe16(guid[4..6], raw.vendor orelse 0);
             writeLe16(guid[8..10], raw.product orelse 0);
             writeLe16(guid[12..14], raw.version orelse 0);
-
-            switch (raw.backend) {
-                .windows_rawinput => guid[14] = 'r',
-                else => {},
-            }
+            guid[14] = raw.driver_signature orelse 0;
+            guid[15] = raw.driver_data orelse 0;
 
             return hexEncodeGuid(allocator, &guid);
         }
     }
 
     var guid = [_]u8{0} ** 16;
+    writeLe16(guid[0..2], sdl_bus_unknown);
+    writeLe16(guid[2..4], sdlCrc16(0, name));
     const copied = @min(name.len, guid.len - 4);
     @memcpy(guid[4 .. 4 + copied], name[0..copied]);
     return hexEncodeGuid(allocator, &guid);
@@ -355,6 +436,61 @@ fn hexEncodeGuid(allocator: std.mem.Allocator, guid: []const u8) ![]u8 {
         out[i * 2 + 1] = charset[byte & 0x0F];
     }
     return out;
+}
+
+fn sdlCrc16(initial: u16, data: []const u8) u16 {
+    var crc = initial;
+    for (data) |byte| {
+        crc = crc16ForByte(@as(u8, @truncate(crc)) ^ byte) ^ (crc >> 8);
+    }
+    return crc;
+}
+
+fn crc16ForByte(byte: u8) u16 {
+    var r = byte;
+    var crc: u16 = 0;
+    var i: usize = 0;
+    while (i < 8) : (i += 1) {
+        crc = (if (((crc ^ r) & 1) != 0) @as(u16, 0xA001) else 0) ^ (crc >> 1);
+        r >>= 1;
+    }
+    return crc;
+}
+
+fn parseGuidBytes(guid: []const u8) ?[16]u8 {
+    if (guid.len != 32) return null;
+
+    var bytes: [16]u8 = undefined;
+    for (&bytes, 0..) |*byte, i| {
+        const hi = std.fmt.charToDigit(guid[i * 2], 16) catch return null;
+        const lo = std.fmt.charToDigit(guid[i * 2 + 1], 16) catch return null;
+        byte.* = @as(u8, @intCast(hi << 4)) | @as(u8, @intCast(lo));
+    }
+    return bytes;
+}
+
+fn guidCrc(guid: [16]u8) u16 {
+    return std.mem.readInt(u16, guid[2..4], .little);
+}
+
+fn clearGuidCrc(guid: *[16]u8) void {
+    writeLe16(guid[2..4], 0);
+}
+
+fn guidVendor(guid: [16]u8) u16 {
+    return std.mem.readInt(u16, guid[4..6], .little);
+}
+
+fn guidProduct(guid: [16]u8) u16 {
+    return std.mem.readInt(u16, guid[8..10], .little);
+}
+
+fn clearGuidVersion(guid: *[16]u8) void {
+    writeLe16(guid[12..14], 0);
+}
+
+fn guidUsesVersion(guid: [16]u8) bool {
+    return guidVendor(guid) != 0 and guidProduct(guid) != 0;
 }
 
 test "parse mapping with metadata and bindings" {
@@ -409,6 +545,8 @@ test "map state handles buttons hats half axes and inverted axes" {
 test "sdl guid synthesis for xinput and usb device" {
     const allocator = std.testing.allocator;
 
+    try std.testing.expectEqual(@as(u16, 0xbb3d), sdlCrc16(0, "123456789"));
+
     const xinput_guid = try createSdlGuidString(allocator, .{
         .backend = .windows_xinput,
         .bus = 0x03,
@@ -424,7 +562,19 @@ test "sdl guid synthesis for xinput and usb device" {
         .version = 0x0000,
     }, "Nintendo Switch Pro Controller");
     defer allocator.free(switch_guid);
-    try std.testing.expectEqualStrings("030000007e0500000920000000000000", switch_guid);
+    try std.testing.expectEqualStrings("030056fb7e0500000920000000000000", switch_guid);
+
+    const rawinput_guid = try createSdlGuidString(allocator, .{
+        .backend = .windows_rawinput,
+        .bus = 0x03,
+        .vendor = 0x045e,
+        .product = 0x02e0,
+        .version = 0x0903,
+        .guid_crc = 0,
+        .driver_signature = 'r',
+    }, "Xbox Wireless Controller");
+    defer allocator.free(rawinput_guid);
+    try std.testing.expectEqualStrings("030000005e040000e002000003097200", rawinput_guid);
 }
 
 test "database lookup with real sdl db subset" {
@@ -450,8 +600,9 @@ test "database lookup with real sdl db subset" {
         .version = 0x0000,
     }, "Amazon Luna Controller");
     defer allocator.free(luna_guid);
-    try std.testing.expectEqualStrings("03000000491900001904000000000000", luna_guid);
-    try std.testing.expect(db.findGuid(luna_guid) != null);
+    try std.testing.expectEqualStrings("030055c0491900001904000000000000", luna_guid);
+    const luna_mapping = db.findGuid(luna_guid) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("Amazon Luna Controller", luna_mapping.name);
 
     const switch_guid = try createSdlGuidString(allocator, .{
         .backend = .linux_evdev,
@@ -462,6 +613,91 @@ test "database lookup with real sdl db subset" {
     }, "Nintendo Switch Pro Controller");
     defer allocator.free(switch_guid);
     try std.testing.expect(db.findGuid(switch_guid) != null);
+}
+
+test "database lookup follows sdl crc and version fallback rules" {
+    const allocator = std.testing.allocator;
+
+    const subset =
+        \\03000000c82d00000160000000000000,8BitDo SN30 Pro v2,crc:769e,a:b1,b:b0,
+        \\03000000c82d00000160000000000000,8BitDo SN30 Pro v1,crc:fa59,a:b1,b:b0,
+        \\030000005e040000e002000000000000,Xbox Wireless Controller,a:b0,b:b1,
+    ;
+
+    var db = Database{};
+    defer db.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 3), try db.addMappingsFromText(allocator, subset));
+    try std.testing.expectEqual(@as(usize, 3), db.mappings.items.len);
+
+    const sn30_crc_guid = "03009e76c82d00000160000000000000";
+    const sn30_mapping = db.findGuid(sn30_crc_guid) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("8BitDo SN30 Pro v2", sn30_mapping.name);
+    try std.testing.expect(db.findGuid("03000000c82d00000160000000000000") == null);
+
+    const xbox_newer_version_guid = "030000005e040000e0020000ffff0000";
+    const xbox_mapping = db.findGuid(xbox_newer_version_guid) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualStrings("Xbox Wireless Controller", xbox_mapping.name);
+}
+
+test "sdl db compatibility sweep for common controller families" {
+    const allocator = std.testing.allocator;
+
+    const subset =
+        \\03000000c82d00000660000000000000,8BitDo Pro 2,a:b1,b:b0,back:b10,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b6,leftstick:b13,lefttrigger:b8,leftx:a0,lefty:a1,rightshoulder:b7,rightstick:b14,righttrigger:b9,rightx:a3,righty:a4,start:b11,x:b4,y:b3,
+        \\05000000c82d00000660000000010000,8BitDo Pro 2 Bluetooth,a:b1,b:b0,back:b10,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b6,leftstick:b13,lefttrigger:a5,leftx:a0,lefty:a1,rightshoulder:b7,rightstick:b14,righttrigger:a4,rightx:a2,righty:a3,start:b11,x:b4,y:b3,
+        \\030000004c050000e60c000000010000,PS5 Controller USB,a:b1,b:b2,back:b8,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,
+        \\050000004c050000e60c000000010000,PS5 Controller Bluetooth,a:b1,b:b2,back:b8,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b12,leftshoulder:b4,leftstick:b10,lefttrigger:a3,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b11,righttrigger:a4,rightx:a2,righty:a5,start:b9,x:b0,y:b3,
+        \\030000005e040000d102000000000000,Xbox One Wired Controller,a:b0,b:b1,back:b9,dpdown:b12,dpleft:b13,dpright:b14,dpup:b11,guide:b10,leftshoulder:b4,leftstick:b6,lefttrigger:a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b7,righttrigger:a5,rightx:a3,righty:a4,start:b8,x:b2,y:b3,
+        \\050000005e040000e002000003090000,Xbox One Wireless Controller Bluetooth,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b10,leftshoulder:b4,leftstick:b8,lefttrigger:a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b9,righttrigger:a5,rightx:a3,righty:a4,start:b7,x:b2,y:b3,
+    ;
+
+    var db = Database{};
+    defer db.deinit(allocator);
+    _ = try db.addMappingsFromText(allocator, subset);
+
+    const cases = [_]struct {
+        info: wio.JoystickInfo,
+        name: []const u8,
+        expected: []const u8,
+    }{
+        .{
+            .info = .{ .backend = .linux_evdev, .bus = 0x03, .vendor = 0x2dc8, .product = 0x6006, .version = 0x0000 },
+            .name = "8BitDo Pro 2",
+            .expected = "8BitDo Pro 2",
+        },
+        .{
+            .info = .{ .backend = .linux_evdev, .bus = 0x05, .vendor = 0x2dc8, .product = 0x6006, .version = 0x0100 },
+            .name = "8BitDo Pro 2",
+            .expected = "8BitDo Pro 2 Bluetooth",
+        },
+        .{
+            .info = .{ .backend = .linux_evdev, .bus = 0x03, .vendor = 0x054c, .product = 0x0ce6, .version = 0x0100 },
+            .name = "PS5 Controller",
+            .expected = "PS5 Controller USB",
+        },
+        .{
+            .info = .{ .backend = .linux_evdev, .bus = 0x05, .vendor = 0x054c, .product = 0x0ce6, .version = 0x0100 },
+            .name = "PS5 Controller",
+            .expected = "PS5 Controller Bluetooth",
+        },
+        .{
+            .info = .{ .backend = .linux_evdev, .bus = 0x03, .vendor = 0x045e, .product = 0x02d1, .version = 0x0000 },
+            .name = "Xbox One Wired Controller",
+            .expected = "Xbox One Wired Controller",
+        },
+        .{
+            .info = .{ .backend = .linux_evdev, .bus = 0x05, .vendor = 0x045e, .product = 0x02e0, .version = 0x0903 },
+            .name = "Xbox One Wireless Controller",
+            .expected = "Xbox One Wireless Controller Bluetooth",
+        },
+    };
+
+    for (cases) |case| {
+        const guid = try createSdlGuidString(allocator, case.info, case.name);
+        defer allocator.free(guid);
+        const mapping = db.findGuid(guid) orelse return error.TestExpectedEqual;
+        try std.testing.expectEqualStrings(case.expected, mapping.name);
+    }
 }
 
 fn parseType(value: []const u8) GamepadType {

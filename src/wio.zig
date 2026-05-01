@@ -20,6 +20,9 @@ pub const JoystickInfo = struct {
     vendor: ?u16 = null,
     product: ?u16 = null,
     version: ?u16 = null,
+    guid_crc: ?u16 = null,
+    driver_signature: ?u8 = null,
+    driver_data: ?u8 = null,
 };
 
 pub const backend = switch (builtin.os.tag) {

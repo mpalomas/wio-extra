@@ -251,9 +251,13 @@ For example:
 ```zig
 pub const JoystickInfo = struct {
     backend: Backend,
+    bus: ?u16,
     vendor: ?u16,
     product: ?u16,
     version: ?u16,
+    guid_crc: ?u16,
+    driver_signature: ?u8,
+    driver_data: ?u8,
 };
 
 pub fn getInfo(self: JoystickDevice) ?JoystickInfo
@@ -564,14 +568,25 @@ The following work is done:
   - `gamepad.DeviceIdentity`
   - `gamepad.identifyDevice()`
 - SDL-style GUID synthesis added in the sidecar layer
+  - bus/vendor/product/version packing
+  - SDL-compatible name CRC packing
+  - optional low-level driver signature/data bytes
 - SDL-compatible mapping parser added
 - semantic gamepad state translation added
+- sidecar runtime handle added:
+  - `gamepad.GamepadDevice`
+  - `GamepadDevice.open()`
+  - `GamepadDevice.poll()`
 - test step added to `build.zig`
 - tests added and passing for:
   - mapping parsing
   - half-axis and inverted-axis handling
   - SDL-style GUID synthesis
+  - SDL-compatible CRC16 generation
   - loading and matching a real SDL DB subset
+  - SDL-style CRC and version fallback during DB lookup
+  - representative SDL DB matches for 8BitDo, PS5, Xbox One, and Xbox
+    Bluetooth entries
 
 ### Verified
 
@@ -589,41 +604,40 @@ new raw metadata hook.
 It is good enough for:
 
 - `xinput`
-- USB-style vendor/product/version devices
+- USB/Bluetooth-style vendor/product/version devices
+- SDL-style name CRC matching
+- low-level driver signature/data bytes when a backend exposes them
 - curated project mappings
 - initial SDL DB subset matching
 
 It is not yet proven to be byte-for-byte compatible with SDL's GUID generation
 for all devices and all backends.
 
+The first SDL DB compatibility sweep also found one concrete remaining
+limitation: Android-style SDL mappings use button and axis capability masks in
+the final GUID bytes. Android is not a priority for this pass, so the current
+sidecar does not try to synthesize those capability-mask GUIDs. If Android
+support becomes important later, expose those masks from the Android backend
+instead of guessing them from desktop joystick state.
+
 ## Next steps
 
 The next recommended work is:
 
-### 1. Runtime mapping layer
+### 1. Continue SDL DB compatibility sweep
 
-Add a small runtime layer that manages:
+Test more real SDL mapping entries across more device families and backend
+variants:
 
-- live `wio` joystick devices
-- `DeviceIdentity`
-- selected mapping
-- polling and translation to `GamepadState`
-
-This should stay outside core `wio`.
-
-### 2. Broader SDL DB compatibility sweep
-
-Test more real SDL mapping entries across more device families:
-
-- Xbox variants
-- PlayStation variants
+- Xbox Series / BLE variants with driver-specific GUID tails
+- PlayStation edge cases and third-party PS5 controllers
 - Nintendo variants
-- 8BitDo and other third-party controllers
+- additional 8BitDo and other third-party controllers
 
 This will show where current GUID synthesis still differs from SDL enough to
 break lookup.
 
-### 3. Metadata / GUID refinement if needed
+### 2. Metadata / GUID refinement if needed
 
 If the broader sweep reveals lookup gaps, refine the sidecar GUID synthesis
 first.
@@ -633,8 +647,10 @@ hook, such as:
 
 - better bus/transport distinction
 - additional backend-discoverable raw identifiers
+- Android button/axis capability masks, if Android SDL DB parity becomes a
+  priority
 
-### 4. Split `src/gamepad.zig`
+### 3. Split `src/gamepad.zig`
 
 Once the runtime layer starts growing, split the sidecar code into smaller
 files:
@@ -646,16 +662,17 @@ files:
 
 ## Resume point for tomorrow
 
-The current foundation is complete and verified.
+The current foundation and first runtime handle are complete and verified.
 
 The next task to start with is:
 
-- implement the sidecar runtime mapping layer on top of the existing Option B
-  metadata hook
+- continue the SDL DB compatibility sweep, focusing on non-Android GUID
+  variants that need metadata beyond bus/vendor/product/version/CRC
 
 Suggested starting point:
 
-1. define a runtime-side `GamepadDevice` or equivalent handle
-2. bind `DeviceIdentity` to a chosen mapping
-3. add a helper that converts `wio.Joystick.poll()` output into `GamepadState`
-4. keep this entirely outside the raw `wio` joystick API
+1. inspect Xbox Series Bluetooth/BLE entries with nonzero final GUID bytes
+2. determine whether those bytes come from HIDAPI driver data or another
+   desktop backend-specific source
+3. decide whether to expose a tiny raw metadata extension or leave those entries
+   to curated/project mappings

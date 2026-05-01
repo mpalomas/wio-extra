@@ -847,11 +847,13 @@ pub const JoystickDevice = union(enum) {
                     .vendor = parseInterfaceHex(info.interface, w.L("VID_")),
                     .product = parseInterfaceHex(info.interface, w.L("PID_")),
                     .version = parseInterfaceHex(info.interface, w.L("REV_")),
+                    .driver_signature = 'r',
                 };
             },
             .xinput => return .{
                 .backend = .windows_xinput,
                 .bus = 0x03,
+                .driver_signature = 'x',
             },
         }
     }
