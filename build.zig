@@ -266,6 +266,7 @@ pub fn build(b: *std.Build) !void {
         },
         .haiku => {
             module.linkSystemLibrary("be", .{});
+            module.linkSystemLibrary("game", .{});
             if (enable_opengl) module.linkSystemLibrary("GL", .{});
             if (enable_joystick) module.linkSystemLibrary("device", .{});
             if (enable_audio) module.linkSystemLibrary("media", .{});
@@ -273,6 +274,7 @@ pub fn build(b: *std.Build) !void {
             const gcc = b.addSystemCommand(&.{
                 "g++",
                 "-Wall",
+                "-Wextra",
                 switch (optimize) {
                     .Debug => "-O0",
                     .ReleaseFast, .ReleaseSafe => "-O3",

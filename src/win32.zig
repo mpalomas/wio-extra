@@ -277,7 +277,7 @@ pub fn createWindow(options: wio.CreateWindowOptions) !*Window {
     self.* = .{
         .events = .init(),
         .window = window,
-        .cursor = loadCursor(.arrow),
+        .cursor = loadCursor(.default),
     };
     _ = w.SetWindowLongPtrW(window, w.GWLP_USERDATA, @bitCast(@intFromPtr(self)));
 
@@ -349,7 +349,8 @@ pub const Window = struct {
     events: internal.EventQueue,
     window: w.HWND,
     cursor: w.HCURSOR,
-    cursor_mode: wio.CursorMode = .normal,
+    text: bool = false,
+    relative_mouse: bool = false,
     tracking: bool = false,
     rect: w.RECT = .{ .left = 0, .top = 0, .right = 0, .bottom = 0 },
     surrogate: u16 = 0,
@@ -367,7 +368,6 @@ pub const Window = struct {
     last_y: u16 = 0,
     touch_bitmap: std.StaticBitSet(256) = .initEmpty(),
     touch_ids: std.AutoHashMapUnmanaged(u16, u8) = .empty,
-    text: bool = false,
     drop: if (build_options.drop) struct {
         target: DropTarget = undefined,
         files: std.ArrayList([]const u8) = .empty,
@@ -404,6 +404,27 @@ pub const Window = struct {
 
     pub fn disableTextInput(self: *Window) void {
         self.text = false;
+    }
+
+    pub fn enableRelativeMouse(self: *Window) void {
+        self.relative_mouse = true;
+        enableRawMouse();
+        self.clipCursor();
+
+        // trigger WM_SETCURSOR
+        var pos: w.POINT = undefined;
+        _ = w.GetCursorPos(&pos);
+        _ = w.SetCursorPos(pos.x, pos.y);
+    }
+
+    pub fn disableRelativeMouse(self: *Window) void {
+        self.relative_mouse = false;
+        _ = w.ClipCursor(null);
+
+        // trigger WM_SETCURSOR
+        var pos: w.POINT = undefined;
+        _ = w.GetCursorPos(&pos);
+        _ = w.SetCursorPos(pos.x, pos.y);
     }
 
     pub fn setTitle(self: *Window, title: []const u8) void {
@@ -464,21 +485,6 @@ pub const Window = struct {
 
     pub fn setCursor(self: *Window, shape: wio.Cursor) void {
         self.cursor = loadCursor(shape);
-
-        // trigger WM_SETCURSOR
-        var pos: w.POINT = undefined;
-        _ = w.GetCursorPos(&pos);
-        _ = w.SetCursorPos(pos.x, pos.y);
-    }
-
-    pub fn setCursorMode(self: *Window, mode: wio.CursorMode) void {
-        self.cursor_mode = mode;
-        if (mode == .relative) {
-            enableRawMouse();
-            self.clipCursor();
-        } else {
-            _ = w.ClipCursor(null);
-        }
 
         // trigger WM_SETCURSOR
         var pos: w.POINT = undefined;
@@ -1241,18 +1247,21 @@ fn clientToWindow(size: wio.Size, style: u32) wio.Size {
 
 fn loadCursor(shape: wio.Cursor) w.HCURSOR {
     return w.LoadCursorW(null, switch (shape) {
-        .arrow => w.IDC_ARROW,
-        .arrow_busy => w.IDC_APPSTARTING,
-        .busy => w.IDC_WAIT,
-        .text => w.IDC_IBEAM,
-        .hand => w.IDC_HAND,
+        .default => w.IDC_ARROW,
+        .none => return null,
+        .help => w.IDC_HELP,
+        .pointer => w.IDC_HAND,
+        .progress => w.IDC_APPSTARTING,
+        .wait => w.IDC_WAIT,
         .crosshair => w.IDC_CROSS,
-        .forbidden => w.IDC_NO,
-        .move => w.IDC_SIZEALL,
-        .size_ns => w.IDC_SIZENS,
-        .size_ew => w.IDC_SIZEWE,
-        .size_nesw => w.IDC_SIZENESW,
-        .size_nwse => w.IDC_SIZENWSE,
+        .text, .vertical_text => w.IDC_IBEAM,
+        .move, .all_scroll => w.IDC_SIZEALL,
+        .not_allowed, .no_drop => w.IDC_NO,
+        .ns_resize, .n_resize, .s_resize, .row_resize => w.IDC_SIZENS,
+        .ew_resize, .e_resize, .w_resize, .col_resize => w.IDC_SIZEWE,
+        .nesw_resize, .ne_resize, .sw_resize => w.IDC_SIZENESW,
+        .nwse_resize, .nw_resize, .se_resize => w.IDC_SIZENWSE,
+        else => w.IDC_ARROW,
     });
 }
 
@@ -1583,10 +1592,7 @@ fn windowProc(window: w.HWND, msg: u32, wParam: w.WPARAM, lParam: w.LPARAM) call
         },
         w.WM_SETCURSOR => {
             if (LOWORD(lParam) == w.HTCLIENT) {
-                switch (self.cursor_mode) {
-                    .normal => _ = w.SetCursor(self.cursor),
-                    .hidden, .relative => _ = w.SetCursor(null),
-                }
+                _ = w.SetCursor(if (self.relative_mouse) null else self.cursor);
                 return w.TRUE;
             } else {
                 return w.DefWindowProcW(window, msg, wParam, lParam);
@@ -1598,7 +1604,7 @@ fn windowProc(window: w.HWND, msg: u32, wParam: w.WPARAM, lParam: w.LPARAM) call
         },
         w.WM_SETFOCUS => {
             self.events.push(.focused);
-            if (self.cursor_mode == .relative) {
+            if (self.relative_mouse) {
                 self.clipCursor();
             }
             return 0;
@@ -1614,7 +1620,7 @@ fn windowProc(window: w.HWND, msg: u32, wParam: w.WPARAM, lParam: w.LPARAM) call
         },
         w.WM_SIZE => {
             const size = wio.Size{ .width = LOWORD(lParam), .height = HIWORD(lParam) };
-            if (self.cursor_mode == .relative) {
+            if (self.relative_mouse) {
                 self.clipCursor();
             }
             switch (wParam) {
@@ -1738,7 +1744,7 @@ fn windowProc(window: w.HWND, msg: u32, wParam: w.WPARAM, lParam: w.LPARAM) call
             return if (msg == w.WM_XBUTTONDOWN or msg == w.WM_XBUTTONUP) w.TRUE else 0;
         },
         w.WM_MOUSEMOVE => {
-            if (self.cursor_mode != .relative) {
+            if (!self.relative_mouse) {
                 const x = LOSHORT(lParam);
                 const y = HISHORT(lParam);
                 if (x >= 0 and y >= 0) {
@@ -1760,7 +1766,7 @@ fn windowProc(window: w.HWND, msg: u32, wParam: w.WPARAM, lParam: w.LPARAM) call
             return 0;
         },
         w.WM_INPUT => {
-            if (self.cursor_mode == .relative) {
+            if (self.relative_mouse) {
                 const handle: w.HRAWINPUT = @ptrFromInt(@as(usize, @bitCast(lParam)));
                 var size: u32 = undefined;
                 if (w.GetRawInputData(handle, w.RID_INPUT, null, &size, @sizeOf(w.RAWINPUTHEADER)) == -1) return 0;

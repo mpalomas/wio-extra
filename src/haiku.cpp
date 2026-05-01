@@ -13,11 +13,12 @@ extern "C" {
     void wioUnfocused(void *);
     void wioVisible(void *);
     void wioHidden(void *);
-    void wioSize(void *, uint16, uint16);
+    void wioSize(void *, uint8, uint16, uint16);
     void wioChars(void *, const char *);
     void wioKey(void *, int32, uint8);
     void wioButtons(void *, uint8);
     void wioMouse(void *, uint16, uint16);
+    void wioMouseRelative(void *, int16, int16);
     void wioScroll(void *, float, float);
     void wioDropBegin(void *);
     void wioDropPosition(void *, uint16, uint16);
@@ -30,15 +31,20 @@ extern "C" {
 }
 
 class WioWindow : public BWindow {
-private:
+public:
     void *zig;
+    BRect normal_frame;
+    bool relative_mouse;
+    uint8 mode;
 #ifdef WIO_DROP
     bool dropping;
 #endif
 
-public:
     WioWindow(void *zig, BRect frame, const char *title) : BWindow(frame, title, B_TITLED_WINDOW, 0) {
         this->zig = zig;
+        this->normal_frame = Frame();
+        this->relative_mouse = false;
+        this->mode = 0;
 #ifdef WIO_DROP
         this->dropping = false;
 #endif
@@ -67,11 +73,13 @@ public:
                 if (message->FindBool("minimize", &minimize) == B_OK) {
                     minimize ? wioHidden(zig) : wioVisible(zig);
                 }
+                break;
             }
             case B_WINDOW_RESIZED: {
                 int32 width, height;
                 if (message->FindInt32("width", &width) == B_OK && message->FindInt32("height", &height) == B_OK) {
-                    wioSize(zig, width, height);
+                    wioSize(zig, mode, width, height);
+                    mode = 0;
                 }
                 break;
             }
@@ -102,12 +110,23 @@ public:
                 if (message->FindInt32("buttons", &buttons) == B_OK) {
                     wioButtons(zig, buttons);
                 }
+                break;
             }
             case B_MOUSE_MOVED: {
                 BPoint where;
                 if (message->FindPoint("where", &where) == B_OK) {
-                    if (where.x > 0 && where.y > 0) {
-                        wioMouse(zig, where.x, where.y);
+                    if (relative_mouse) {
+                        BRect bounds = Bounds();
+                        int16 dx = where.x - (bounds.right / 2);
+                        int16 dy = where.y - (bounds.bottom / 2);
+                        if (dx != 0 || dy != 0) {
+                            wioMouseRelative(zig, dx, dy);
+                            WarpCursor();
+                        }
+                    } else {
+                        if (where.x > 0 && where.y > 0) {
+                            wioMouse(zig, where.x, where.y);
+                        }
                     }
                 }
 
@@ -160,6 +179,12 @@ public:
             BWindow::DispatchMessage(message, target);
         }
     }
+
+    void WarpCursor(void) {
+        BRect bounds = Bounds();
+        BPoint centre = ConvertToScreen(BPoint(bounds.right / 2, bounds.bottom / 2));
+        set_mouse_position(centre.x, centre.y);
+    }
 };
 
 extern "C" {
@@ -193,8 +218,41 @@ extern "C" {
         window->Quit();
     }
 
+    void wioEnableRelativeMouse(WioWindow *window) {
+        window->relative_mouse = true;
+        be_app->HideCursor();
+        window->WarpCursor();
+    }
+
+    void wioDisableRelativeMouse(WioWindow *window) {
+        window->relative_mouse = false;
+        be_app->ShowCursor();
+    }
+
     void wioSetTitle(WioWindow *window, const char *title) {
         window->SetTitle(title);
+    }
+
+    void wioSetMode(WioWindow *window, uint8 mode) {
+        BRect frame;
+        switch (mode) {
+            case 0:
+                frame = window->normal_frame;
+                break;
+            case 1:
+                return;
+            case 2:
+                frame = BScreen(window).Frame();
+                frame.right += 1;
+                frame.bottom += 1;
+                if (frame == window->Frame()) {
+                    return;
+                }
+                window->mode = 2;
+                break;
+        }
+        window->MoveTo(frame.left, frame.top);
+        window->ResizeTo(frame.right - frame.left, frame.bottom - frame.top);
     }
 
     void wioSetSize(WioWindow *window, float width, float height) {
@@ -202,40 +260,44 @@ extern "C" {
     }
 
     void wioSetCursor(uint8 shape) {
-        BCursorID id;
-        switch (shape) {
-            case 2:
-                id = B_CURSOR_ID_PROGRESS;
-                break;
-            case 3:
-                id = B_CURSOR_ID_I_BEAM;
-                break;
-            case 4:
-                id = B_CURSOR_ID_FOLLOW_LINK;
-                break;
-            case 6:
-                id = B_CURSOR_ID_NOT_ALLOWED;
-                break;
-            case 7:
-                id = B_CURSOR_ID_MOVE;
-                break;
-            case 8:
-                id = B_CURSOR_ID_RESIZE_NORTH_SOUTH;
-                break;
-            case 9:
-                id = B_CURSOR_ID_RESIZE_EAST_WEST;
-                break;
-            case 10:
-                id = B_CURSOR_ID_RESIZE_NORTH_EAST_SOUTH_WEST;
-                break;
-            case 11:
-                id = B_CURSOR_ID_RESIZE_NORTH_WEST_SOUTH_EAST;
-                break;
-            default:
-                id = B_CURSOR_ID_SYSTEM_DEFAULT;
-                break;
-        }
-        BCursor cursor = BCursor(id);
+        static const BCursorID ids[] = {
+            B_CURSOR_ID_SYSTEM_DEFAULT,
+            B_CURSOR_ID_NO_CURSOR,
+            B_CURSOR_ID_CONTEXT_MENU,
+            B_CURSOR_ID_HELP,
+            B_CURSOR_ID_FOLLOW_LINK,
+            B_CURSOR_ID_SYSTEM_DEFAULT, // .progress
+            B_CURSOR_ID_PROGRESS,
+            B_CURSOR_ID_SYSTEM_DEFAULT, // .cell
+            B_CURSOR_ID_CROSS_HAIR,
+            B_CURSOR_ID_I_BEAM,
+            B_CURSOR_ID_I_BEAM_HORIZONTAL,
+            B_CURSOR_ID_SYSTEM_DEFAULT, // .alias
+            B_CURSOR_ID_COPY,
+            B_CURSOR_ID_MOVE,
+            B_CURSOR_ID_SYSTEM_DEFAULT, // .no_drop
+            B_CURSOR_ID_NOT_ALLOWED,
+            B_CURSOR_ID_GRAB,
+            B_CURSOR_ID_GRABBING,
+            B_CURSOR_ID_RESIZE_EAST,
+            B_CURSOR_ID_RESIZE_NORTH,
+            B_CURSOR_ID_RESIZE_NORTH_EAST,
+            B_CURSOR_ID_RESIZE_NORTH_WEST,
+            B_CURSOR_ID_RESIZE_SOUTH,
+            B_CURSOR_ID_RESIZE_SOUTH_EAST,
+            B_CURSOR_ID_RESIZE_SOUTH_WEST,
+            B_CURSOR_ID_RESIZE_WEST,
+            B_CURSOR_ID_RESIZE_EAST_WEST,
+            B_CURSOR_ID_RESIZE_NORTH_SOUTH,
+            B_CURSOR_ID_RESIZE_NORTH_EAST_SOUTH_WEST,
+            B_CURSOR_ID_RESIZE_NORTH_WEST_SOUTH_EAST,
+            B_CURSOR_ID_RESIZE_EAST_WEST,
+            B_CURSOR_ID_RESIZE_NORTH_SOUTH,
+            B_CURSOR_ID_MOVE,
+            B_CURSOR_ID_ZOOM_IN,
+            B_CURSOR_ID_ZOOM_OUT,
+        };
+        BCursor cursor = BCursor(ids[shape]);
         be_app->SetCursor(&cursor);
     }
 
@@ -356,6 +418,7 @@ extern "C" {
 #ifdef WIO_AUDIO
 
     static void writeFn(void *data, void *buffer, size_t size, const media_raw_audio_format &format) {
+        (void)format;
         wioAudioOutputWrite(data, buffer, size);
     }
 

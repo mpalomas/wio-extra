@@ -39,7 +39,7 @@ static void warpCursor(NSWindow *window) {
 @end
 
 @interface WioView : NSView <NSTextInputClient>
-- (uint8_t)cursorMode;
+- (BOOL)relativeMouse;
 @end
 
 @implementation WioApplicationDelegate
@@ -93,7 +93,7 @@ static void warpCursor(NSWindow *window) {
 
     NSWindow *window = [notification object];
     WioView *view = [window contentView];
-    if ([view cursorMode] == 2) {
+    if ([view relativeMouse]) {
         warpCursor(window);
     }
 }
@@ -114,7 +114,7 @@ static void warpCursor(NSWindow *window) {
     NSWindow *window = [notification object];
     WioView *view = [window contentView];
 
-    if ([view cursorMode] == 2) {
+    if ([view relativeMouse]) {
         warpCursor(window);
     }
 
@@ -161,7 +161,7 @@ static void warpCursor(NSWindow *window) {
     NSCursor *cursor;
     uint16_t textX, textY;
     BOOL textInput;
-    uint8_t cursorMode;
+    BOOL relativeMouse;
     BOOL cursorInside;
 #ifdef WIO_FRAMEBUFFER
     CGContextRef bitmap;
@@ -171,6 +171,7 @@ static void warpCursor(NSWindow *window) {
 - (instancetype)initWithZigWindow:(void *)value {
     self = [super init];
     zig = value;
+    cursor = [NSCursor arrowCursor];
     return self;
 }
 
@@ -185,19 +186,34 @@ static void warpCursor(NSWindow *window) {
 }
 
 - (void)setCursor:(NSCursor *)value {
-    cursor = value;
+    if (value != cursor) {
+        if (cursorInside) {
+            if (value == nil) {
+                [NSCursor hide];
+            } else if (cursor == nil) {
+                [NSCursor unhide];
+            }
+        }
+        cursor = value;
+    }
     [self updateTrackingAreas];
 }
 
-- (void)setCursorMode:(uint8_t)value {
-    if (!!value != !!cursorMode) {
-        if (cursorInside) value ? [NSCursor hide] : [NSCursor unhide];
+- (void)setRelativeMouse:(BOOL)value {
+    if (value != relativeMouse) {
+        if (cursorInside) {
+            if (value) {
+                [NSCursor hide];
+            } else {
+                [NSCursor unhide];
+            }
+        }
+        relativeMouse = value;
     }
-    cursorMode = value;
 }
 
-- (uint8_t)cursorMode {
-    return cursorMode;
+- (BOOL)relativeMouse {
+    return relativeMouse;
 }
 
 - (void)insertText:(id)string replacementRange:(NSRange)replacementRange {
@@ -261,7 +277,7 @@ static void warpCursor(NSWindow *window) {
     [self removeTrackingArea:area];
     area = [[NSTrackingArea alloc]
         initWithRect:[self frame]
-        options:NSTrackingActiveInKeyWindow | NSTrackingCursorUpdate | NSTrackingMouseEnteredAndExited
+        options:NSTrackingActiveInKeyWindow | NSTrackingCursorUpdate | NSTrackingMouseEnteredAndExited | NSTrackingEnabledDuringMouseDrag
         owner:self
         userInfo:nil];
     [self addTrackingArea:area];
@@ -331,15 +347,15 @@ static void warpCursor(NSWindow *window) {
 }
 
 - (void)mouseMoved:(NSEvent *)event {
-    if (cursorMode == 2) {
+    if (relativeMouse) {
         wioMouseRelative(zig, [event deltaX], [event deltaY]);
-        return;
+    } else {
+        NSPoint location = [event locationInWindow];
+        NSRect frame = [self frame];
+        location.y = frame.size.height - location.y - 1;
+        if (location.x < 0 || location.y < 0 || location.x > frame.size.width || location.y > frame.size.height) return;
+        wioMouse(zig, location.x, location.y);
     }
-    NSPoint location = [event locationInWindow];
-    NSRect frame = [self frame];
-    location.y = frame.size.height - location.y - 1;
-    if (location.x < 0 || location.y < 0 || location.x > frame.size.width || location.y > frame.size.height) return;
-    wioMouse(zig, location.x, location.y);
 }
 
 - (void)mouseDragged:(NSEvent *)event {
@@ -355,14 +371,14 @@ static void warpCursor(NSWindow *window) {
 }
 
 - (void)mouseEntered:(NSEvent *)event {
-    if (!cursorInside && cursorMode != 0) [NSCursor hide];
+    if (!cursorInside && (cursor == nil || relativeMouse)) [NSCursor hide];
     cursorInside = YES;
 }
 
 - (void)mouseExited:(NSEvent *)event {
     wioMouseLeave(zig);
 
-    if (cursorInside && cursorMode != 0) [NSCursor unhide];
+    if (cursorInside && (cursor == nil || relativeMouse)) [NSCursor unhide];
     cursorInside = NO;
 }
 
@@ -487,6 +503,17 @@ void wioDisableTextInput(NSWindow *window) {
     [[window contentView] setTextInput:NO x:0 y:0];
 }
 
+void wioEnableRelativeMouse(NSWindow *window) {
+    [[window contentView] setRelativeMouse:YES];
+    warpCursor(window);
+    CGAssociateMouseAndMouseCursorPosition(NO);
+}
+
+void wioDisableRelativeMouse(NSWindow *window) {
+    [[window contentView] setRelativeMouse:NO];
+    CGAssociateMouseAndMouseCursorPosition(YES);
+}
+
 void wioSetTitle(NSWindow *window, const char *ptr, size_t len) {
     [window setTitle:string(ptr, len)];
 }
@@ -503,25 +530,25 @@ void wioSetSize(NSWindow *window, uint16_t width, uint16_t height) {
 void wioSetCursor(NSWindow *window, uint8_t shape) {
     NSCursor *cursor;
     switch (shape) {
-        case 3: cursor = [NSCursor IBeamCursor]; break;
+        case 1: cursor = nil; break;
+        case 2: cursor = [NSCursor contextualMenuCursor]; break;
         case 4: cursor = [NSCursor pointingHandCursor]; break;
-        case 5: cursor = [NSCursor crosshairCursor]; break;
-        case 6: cursor = [NSCursor operationNotAllowedCursor]; break;
-        case 8: cursor = [NSCursor resizeUpDownCursor]; break;
-        case 9: cursor = [NSCursor resizeLeftRightCursor]; break;
+        case 8: cursor = [NSCursor crosshairCursor]; break;
+        case 9: cursor = [NSCursor IBeamCursor]; break;
+        case 10: cursor = [NSCursor IBeamCursorForVerticalLayout]; break;
+        case 12: cursor = [NSCursor dragCopyCursor]; break;
+        case 15: cursor = [NSCursor operationNotAllowedCursor]; break;
+        case 16: cursor = [NSCursor openHandCursor]; break;
+        case 17: cursor = [NSCursor closedHandCursor]; break;
+        case 18: cursor = [NSCursor resizeRightCursor]; break;
+        case 19: cursor = [NSCursor resizeUpCursor]; break;
+        case 22: cursor = [NSCursor resizeDownCursor]; break;
+        case 25: cursor = [NSCursor resizeLeftCursor]; break;
+        case 26: cursor = [NSCursor resizeLeftRightCursor]; break;
+        case 27: cursor = [NSCursor resizeUpDownCursor]; break;
         default: cursor = [NSCursor arrowCursor]; break;
     }
     [[window contentView] setCursor:cursor];
-}
-
-void wioSetCursorMode(NSWindow *window, uint8_t mode) {
-    [[window contentView] setCursorMode:mode];
-    if (mode == 2) {
-        warpCursor(window);
-        CGAssociateMouseAndMouseCursorPosition(NO);
-    } else {
-        CGAssociateMouseAndMouseCursorPosition(YES);
-    }
 }
 
 void wioRequestAttention(void) {
