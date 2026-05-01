@@ -153,6 +153,57 @@ Behavioral constraints:
 - current mode only; no full mode enumeration yet
 - no guarantee that a previously fetched `Display` survives physical unplug/reconfiguration across arbitrary future calls
 
+### Wayland backend
+
+The Linux Wayland backend follows SDL3's default Wayland display semantics:
+
+- `bounds` are desktop/global-compositor coordinates, not physical pixels.
+- `pixel_width` / `pixel_height` carry the current native output mode in physical pixels.
+- `content_scale` describes the relationship between desktop coordinate units and physical pixels.
+- `usable_bounds` currently equals `bounds`, because core Wayland does not expose a portable reserved-work-area concept for panels, docks, or bars.
+
+This means a 2560x1440 output at 200% scale should normally report:
+
+```text
+bounds: 1280x720
+content_scale: 2.0
+pixels: 2560x1440
+```
+
+For fractional scaling, the integer `wl_output.scale` value is not sufficient. A compositor may advertise `wl_output.scale = 2` while its actual logical output size corresponds to a fractional scale such as 1.15. In that case, relying only on `wl_output.mode / wl_output.scale` would incorrectly report 1280x720 for a 2560x1440 monitor, while the compositor's logical size might be closer to 2227x1252.
+
+Implementation details:
+
+- Track each `wl_output` announced by the registry.
+- Listen to core `wl_output` events:
+  - `geometry`: fallback position and transform
+  - `mode`: current physical pixel mode and millihertz refresh rate
+  - `scale`: integer fallback scale
+- Bind `zxdg_output_manager_v1` when available.
+- For each output, create a `zxdg_output_v1` object and prefer its:
+  - `logical_position` for `bounds.x` / `bounds.y`
+  - `logical_size` for `bounds.width` / `bounds.height`
+- Compute `content_scale` as:
+  - `transformed_native_pixel_width / xdg_logical_width` when xdg-output logical size is available
+  - otherwise the integer `wl_output.scale`
+- Account for rotated outputs when reporting physical pixel width/height and when deriving fallback logical bounds.
+- Convert Wayland refresh from millihertz into both:
+  - `hz = refresh_millihz / 1000.0`
+  - a reduced rational numerator/denominator when available
+
+Initialization detail:
+
+- After binding registry globals, perform a second `wl_display_roundtrip`.
+- The first roundtrip discovers globals and creates `zxdg_output_v1` objects.
+- The second roundtrip lets the compositor deliver xdg-output logical geometry before display queries immediately after `wio.init()`.
+
+Known limitations:
+
+- There is no xdg-output fallback for compositors that do not support `zxdg_output_manager_v1`; those use integer `wl_output.scale`.
+- The backend does not implement SDL's optional `SDL_VIDEO_WAYLAND_SCALE_TO_DISPLAY=1` behavior, which reports pixel-space display bounds for legacy non-DPI-aware apps. `wio` should keep logical bounds as the default API semantics.
+- There is no mode switching or full mode enumeration.
+- Hotplug removal marks a display handle disconnected; handles fetched before reconfiguration should not be assumed valid forever.
+
 ## Test Plan
 
 Add coverage sufficient for implementation acceptance:
@@ -175,11 +226,17 @@ Add coverage sufficient for implementation acceptance:
   - on a HiDPI display, `pixel_width` and `pixel_height` should reflect physical mode size, not AppKit point size
 - fallback check:
   - implementation behaves correctly when rational refresh info is unavailable and only `hz` can be returned
+- Wayland API/unit checks:
+  - display API shape compiles through a dedicated display test root
+  - Wayland integer-scale fallback converts native pixels to logical bounds
+  - Wayland rotated outputs swap physical width/height where appropriate
+  - Wayland xdg-output logical size wins over integer `wl_output.scale`
+  - fractional content scale is computed from native pixels divided by xdg-output logical width
 
 ## Assumptions
 
-- The initial API is macOS-first; non-macOS backends remain stubs for now.
-- `Bounds` are in AppKit desktop coordinates, not physical pixels.
+- The initial API was macOS-first; macOS, Win32, and Linux Wayland now have concrete backends.
+- `Bounds` are desktop coordinate units, not physical pixels. On macOS these are AppKit coordinates; on Wayland these are logical compositor coordinates.
 - Physical pixel resolution is carried separately as `pixel_width` / `pixel_height`.
 - `Display.release()` exists for consistency even when it is a no-op.
 - `display-api-plan.md` should live at repo root to avoid creating a new docs tree.
@@ -205,3 +262,7 @@ Add coverage sufficient for implementation acceptance:
   - `CGDisplayCopyDisplayMode`: https://developer.apple.com/documentation/coregraphics/cgdisplaycopydisplaymode%28_%3A%29
   - `CGDisplayModeGetRefreshRate`: https://developer.apple.com/documentation/coregraphics/cgdisplaymode/refreshrate
   - `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`: https://developer.apple.com/documentation/corevideo/cvdisplaylinkgetnominaloutputvideorefreshperiod%28_%3A%29
+- Wayland implementation sources:
+  - `wl_output` core protocol
+  - `xdg-output-unstable-v1`
+  - SDL3 Wayland backend comparison in local checkout: `/home/michael/dev/c++/SDL/src/video/wayland/SDL_waylandvideo.c`

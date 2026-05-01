@@ -192,6 +192,7 @@ pub fn init() !bool {
     errdefer destroyProxies();
     _ = h.wl_registry_add_listener(registry, &registry_listener, null);
     _ = c.wl_display_roundtrip(display);
+    _ = c.wl_display_roundtrip(display);
     if (compositor == null) return error.Unexpected;
 
     libdecor_context = c.libdecor_new(display, &libdecor_interface) orelse return error.Unexpected;
@@ -820,6 +821,8 @@ fn registryGlobal(_: ?*anyopaque, _: ?*h.wl_registry, name: u32, interface_ptr: 
         activation = @ptrCast(h.wl_registry_bind(registry, name, &h.xdg_activation_v1_interface, @min(version, 1)));
     } else if (std.mem.eql(u8, interface, "wl_output")) {
         display_api.bind(registry, name, version);
+    } else if (std.mem.eql(u8, interface, "zxdg_output_manager_v1")) {
+        display_api.bindXdgOutputManager(registry, name, version);
     }
 }
 

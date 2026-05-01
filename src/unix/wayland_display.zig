@@ -7,11 +7,14 @@ const math = @import("wayland_display_math.zig");
 const Output = struct {
     name: u32,
     output: ?*h.wl_output,
+    xdg_output: ?*h.zxdg_output_v1 = null,
     connected: bool = true,
     state: math.OutputState = .{},
+    has_logical_position: bool = false,
 };
 
 var initialized = false;
+var xdg_output_manager: ?*h.zxdg_output_manager_v1 = null;
 var outputs: std.ArrayListUnmanaged(*Output) = .empty;
 
 pub fn init() void {
@@ -20,11 +23,14 @@ pub fn init() void {
 
 pub fn deinit() void {
     for (outputs.items) |output| {
+        if (output.xdg_output) |xdg_output| h.zxdg_output_v1_destroy(xdg_output);
         if (output.output) |wl_output| h.wl_output_destroy(wl_output);
         internal.allocator.destroy(output);
     }
     outputs.deinit(internal.allocator);
     outputs = .empty;
+    if (xdg_output_manager) |manager| h.zxdg_output_manager_v1_destroy(manager);
+    xdg_output_manager = null;
     initialized = false;
 }
 
@@ -44,12 +50,22 @@ pub fn bind(registry: ?*h.wl_registry, name: u32, version: u32) void {
         return;
     };
     _ = h.wl_output_add_listener(wl_output, &output_listener, output);
+    bindXdgOutput(output);
+}
+
+pub fn bindXdgOutputManager(registry: ?*h.wl_registry, name: u32, version: u32) void {
+    xdg_output_manager = @ptrCast(h.wl_registry_bind(registry, name, &h.zxdg_output_manager_v1_interface, @min(version, 3)) orelse return);
+    for (outputs.items) |output| bindXdgOutput(output);
 }
 
 pub fn remove(name: u32) void {
     for (outputs.items) |output| {
         if (output.name != name or !output.connected) continue;
         output.connected = false;
+        if (output.xdg_output) |xdg_output| {
+            h.zxdg_output_v1_destroy(xdg_output);
+            output.xdg_output = null;
+        }
         if (output.output) |wl_output| {
             h.wl_output_destroy(wl_output);
             output.output = null;
@@ -95,8 +111,8 @@ pub const Display = struct {
             .bounds = bounds,
             .usable_bounds = bounds,
             .content_scale = math.contentScale(output.state),
-            .pixel_width = output.state.pixel_width,
-            .pixel_height = output.state.pixel_height,
+            .pixel_width = math.pixelSize(output.state).width,
+            .pixel_height = math.pixelSize(output.state).height,
             .refresh_rate = math.refreshRate(output.state),
         };
     }
@@ -130,6 +146,14 @@ fn outputBounds(output: *const Output) types.Bounds {
     return math.bounds(output.state);
 }
 
+fn bindXdgOutput(output: *Output) void {
+    if (output.xdg_output != null) return;
+    const manager = xdg_output_manager orelse return;
+    const wl_output = output.output orelse return;
+    output.xdg_output = h.zxdg_output_manager_v1_get_xdg_output(manager, wl_output) orelse return;
+    _ = h.zxdg_output_v1_add_listener(output.xdg_output, &xdg_output_listener, output);
+}
+
 const output_listener = h.wl_output_listener{
     .geometry = outputGeometry,
     .mode = outputMode,
@@ -152,8 +176,10 @@ fn outputGeometry(
     transform: c_int,
 ) callconv(.c) void {
     const output: *Output = @ptrCast(@alignCast(data orelse return));
-    output.state.x = x;
-    output.state.y = y;
+    if (!output.has_logical_position) {
+        output.state.x = x;
+        output.state.y = y;
+    }
     output.state.transform = transform;
 }
 
@@ -175,3 +201,31 @@ fn outputScale(data: ?*anyopaque, _: ?*h.wl_output, factor: c_int) callconv(.c) 
 fn outputName(_: ?*anyopaque, _: ?*h.wl_output, _: [*c]const u8) callconv(.c) void {}
 
 fn outputDescription(_: ?*anyopaque, _: ?*h.wl_output, _: [*c]const u8) callconv(.c) void {}
+
+const xdg_output_listener = h.zxdg_output_v1_listener{
+    .logical_position = xdgOutputLogicalPosition,
+    .logical_size = xdgOutputLogicalSize,
+    .done = xdgOutputDone,
+    .name = xdgOutputName,
+    .description = xdgOutputDescription,
+};
+
+fn xdgOutputLogicalPosition(data: ?*anyopaque, _: ?*h.zxdg_output_v1, x: i32, y: i32) callconv(.c) void {
+    const output: *Output = @ptrCast(@alignCast(data orelse return));
+    output.state.x = x;
+    output.state.y = y;
+    output.has_logical_position = true;
+}
+
+fn xdgOutputLogicalSize(data: ?*anyopaque, _: ?*h.zxdg_output_v1, width: i32, height: i32) callconv(.c) void {
+    const output: *Output = @ptrCast(@alignCast(data orelse return));
+    output.state.logical_width = std.math.cast(u32, width) orelse 0;
+    output.state.logical_height = std.math.cast(u32, height) orelse 0;
+    output.state.has_logical_size = output.state.logical_width > 0 and output.state.logical_height > 0;
+}
+
+fn xdgOutputDone(_: ?*anyopaque, _: ?*h.zxdg_output_v1) callconv(.c) void {}
+
+fn xdgOutputName(_: ?*anyopaque, _: ?*h.zxdg_output_v1, _: [*c]const u8) callconv(.c) void {}
+
+fn xdgOutputDescription(_: ?*anyopaque, _: ?*h.zxdg_output_v1, _: [*c]const u8) callconv(.c) void {}

@@ -184,6 +184,7 @@ pub fn build(b: *std.Build) !void {
                     try cimport.appendSlice(b.allocator,
                         \\#include <viewporter-protocol.c>
                         \\#include <fractional-scale-v1-protocol.c>
+                        \\#include <xdg-output-unstable-v1-protocol.c>
                         \\#include <text-input-v3-protocol.c>
                         \\#include <tablet-v2-protocol.c>
                         \\#include <cursor-shape-v1-protocol.c>
@@ -193,6 +194,7 @@ pub fn build(b: *std.Build) !void {
                         \\#include <wayland-client-protocol.h>
                         \\#include <viewporter-client-protocol.h>
                         \\#include <fractional-scale-v1-client-protocol.h>
+                        \\#include <xdg-output-unstable-v1-client-protocol.h>
                         \\#include <text-input-v3-client-protocol.h>
                         \\#include <cursor-shape-v1-client-protocol.h>
                         \\#include <pointer-constraints-v1-client-protocol.h>
@@ -235,6 +237,7 @@ pub fn build(b: *std.Build) !void {
                 if (b.lazyDependency("wio_unix_headers", .{})) |unix_headers| {
                     translate_c.addIncludePath(unix_headers.path("."));
                 }
+                translate_c.addIncludePath(b.path("src/unix/protocols"));
                 module.addImport("c", translate_c.createModule());
 
                 if (system_integration) {

@@ -8,24 +8,38 @@ pub const OutputState = struct {
     scale: i32 = 1,
     pixel_width: u32 = 0,
     pixel_height: u32 = 0,
+    logical_width: u32 = 0,
+    logical_height: u32 = 0,
+    has_logical_size: bool = false,
     refresh_millihz: i32 = 0,
 };
 
 pub fn bounds(output: OutputState) types.Bounds {
-    const scale = @max(output.scale, 1);
-    const rotated = output.transform == 1 or output.transform == 3 or output.transform == 5 or output.transform == 7;
-    const pixel_width = if (rotated) output.pixel_height else output.pixel_width;
-    const pixel_height = if (rotated) output.pixel_width else output.pixel_height;
+    const pixels = pixelSize(output);
+    const width = if (output.has_logical_size) output.logical_width else divCeil(pixels.width, @intCast(@max(output.scale, 1)));
+    const height = if (output.has_logical_size) output.logical_height else divCeil(pixels.height, @intCast(@max(output.scale, 1)));
+
     return .{
         .x = output.x,
         .y = output.y,
-        .width = divCeil(pixel_width, @intCast(scale)),
-        .height = divCeil(pixel_height, @intCast(scale)),
+        .width = width,
+        .height = height,
     };
 }
 
 pub fn contentScale(output: OutputState) f64 {
+    if (output.has_logical_size and output.logical_width > 0) {
+        return @as(f64, @floatFromInt(pixelSize(output).width)) / @as(f64, @floatFromInt(output.logical_width));
+    }
     return @floatFromInt(@max(output.scale, 1));
+}
+
+pub fn pixelSize(output: OutputState) struct { width: u32, height: u32 } {
+    const rotated = output.transform == 1 or output.transform == 3 or output.transform == 5 or output.transform == 7;
+    return .{
+        .width = if (rotated) output.pixel_height else output.pixel_width,
+        .height = if (rotated) output.pixel_width else output.pixel_height,
+    };
 }
 
 pub fn refreshRate(output: OutputState) types.RefreshRate {
@@ -76,6 +90,20 @@ test "wayland bounds account for rotated output transforms" {
     });
 
     try std.testing.expectEqual(types.Bounds{ .x = 0, .y = 0, .width = 1920, .height = 1080 }, actual);
+}
+
+test "wayland xdg-output logical size supports fractional output scale" {
+    const output = OutputState{
+        .scale = 2,
+        .pixel_width = 2560,
+        .pixel_height = 1440,
+        .logical_width = 2227,
+        .logical_height = 1252,
+        .has_logical_size = true,
+    };
+
+    try std.testing.expectEqual(types.Bounds{ .x = 0, .y = 0, .width = 2227, .height = 1252 }, bounds(output));
+    try std.testing.expectApproxEqAbs(@as(f64, 1.1495), contentScale(output), 0.001);
 }
 
 test "wayland refresh rate converts millihertz to reduced ratio" {
