@@ -1,0 +1,177 @@
+const std = @import("std");
+const h = @import("c");
+const internal = @import("../wio.internal.zig");
+const types = @import("../display_types.zig");
+const math = @import("wayland_display_math.zig");
+
+const Output = struct {
+    name: u32,
+    output: ?*h.wl_output,
+    connected: bool = true,
+    state: math.OutputState = .{},
+};
+
+var initialized = false;
+var outputs: std.ArrayListUnmanaged(*Output) = .empty;
+
+pub fn init() void {
+    initialized = true;
+}
+
+pub fn deinit() void {
+    for (outputs.items) |output| {
+        if (output.output) |wl_output| h.wl_output_destroy(wl_output);
+        internal.allocator.destroy(output);
+    }
+    outputs.deinit(internal.allocator);
+    outputs = .empty;
+    initialized = false;
+}
+
+pub fn bind(registry: ?*h.wl_registry, name: u32, version: u32) void {
+    const wl_output: *h.wl_output = @ptrCast(h.wl_registry_bind(registry, name, &h.wl_output_interface, @min(version, 4)) orelse return);
+    const output = internal.allocator.create(Output) catch {
+        h.wl_output_destroy(wl_output);
+        return;
+    };
+    output.* = .{
+        .name = name,
+        .output = wl_output,
+    };
+    outputs.append(internal.allocator, output) catch {
+        h.wl_output_destroy(wl_output);
+        internal.allocator.destroy(output);
+        return;
+    };
+    _ = h.wl_output_add_listener(wl_output, &output_listener, output);
+}
+
+pub fn remove(name: u32) void {
+    for (outputs.items) |output| {
+        if (output.name != name or !output.connected) continue;
+        output.connected = false;
+        if (output.output) |wl_output| {
+            h.wl_output_destroy(wl_output);
+            output.output = null;
+        }
+        return;
+    }
+}
+
+pub const DisplayIterator = struct {
+    snapshot: []*Output = &.{},
+    index: usize = 0,
+
+    pub fn init() DisplayIterator {
+        if (!initialized) return .{};
+
+        var list = std.ArrayListUnmanaged(*Output).empty;
+        for (outputs.items) |output| {
+            if (output.connected) list.append(internal.allocator, output) catch {};
+        }
+        return .{ .snapshot = list.toOwnedSlice(internal.allocator) catch &.{} };
+    }
+
+    pub fn deinit(self: *DisplayIterator) void {
+        internal.allocator.free(self.snapshot);
+    }
+
+    pub fn next(self: *DisplayIterator) ?Display {
+        if (self.index == self.snapshot.len) return null;
+        defer self.index += 1;
+        return .{ .output = self.snapshot[self.index] };
+    }
+};
+
+pub const Display = struct {
+    output: *Output,
+
+    pub fn release(_: Display) void {}
+
+    pub fn getCurrentMode(self: Display) ?types.DisplayMode {
+        const output = self.liveOutput() orelse return null;
+        const bounds = outputBounds(output);
+        return .{
+            .bounds = bounds,
+            .usable_bounds = bounds,
+            .content_scale = math.contentScale(output.state),
+            .pixel_width = output.state.pixel_width,
+            .pixel_height = output.state.pixel_height,
+            .refresh_rate = math.refreshRate(output.state),
+        };
+    }
+
+    pub fn getBounds(self: Display) ?types.Bounds {
+        return outputBounds(self.liveOutput() orelse return null);
+    }
+
+    pub fn getUsableBounds(self: Display) ?types.Bounds {
+        return self.getBounds();
+    }
+
+    pub fn getContentScale(self: Display) f64 {
+        const output = self.liveOutput() orelse return 0;
+        return math.contentScale(output.state);
+    }
+
+    pub fn getRefreshRate(self: Display) types.RefreshRate {
+        const output = self.liveOutput() orelse return .{};
+        return math.refreshRate(output.state);
+    }
+
+    fn liveOutput(self: Display) ?*const Output {
+        if (!self.output.connected or self.output.output == null) return null;
+        if (self.output.state.pixel_width == 0 or self.output.state.pixel_height == 0) return null;
+        return self.output;
+    }
+};
+
+fn outputBounds(output: *const Output) types.Bounds {
+    return math.bounds(output.state);
+}
+
+const output_listener = h.wl_output_listener{
+    .geometry = outputGeometry,
+    .mode = outputMode,
+    .done = outputDone,
+    .scale = outputScale,
+    .name = outputName,
+    .description = outputDescription,
+};
+
+fn outputGeometry(
+    data: ?*anyopaque,
+    _: ?*h.wl_output,
+    x: c_int,
+    y: c_int,
+    _: c_int,
+    _: c_int,
+    _: c_int,
+    _: [*c]const u8,
+    _: [*c]const u8,
+    transform: c_int,
+) callconv(.c) void {
+    const output: *Output = @ptrCast(@alignCast(data orelse return));
+    output.state.x = x;
+    output.state.y = y;
+    output.state.transform = transform;
+}
+
+fn outputMode(data: ?*anyopaque, _: ?*h.wl_output, flags: u32, width: c_int, height: c_int, refresh: c_int) callconv(.c) void {
+    if (flags & h.WL_OUTPUT_MODE_CURRENT == 0) return;
+    const output: *Output = @ptrCast(@alignCast(data orelse return));
+    output.state.pixel_width = std.math.cast(u32, width) orelse 0;
+    output.state.pixel_height = std.math.cast(u32, height) orelse 0;
+    output.state.refresh_millihz = refresh;
+}
+
+fn outputDone(_: ?*anyopaque, _: ?*h.wl_output) callconv(.c) void {}
+
+fn outputScale(data: ?*anyopaque, _: ?*h.wl_output, factor: c_int) callconv(.c) void {
+    const output: *Output = @ptrCast(@alignCast(data orelse return));
+    output.state.scale = @max(factor, 1);
+}
+
+fn outputName(_: ?*anyopaque, _: ?*h.wl_output, _: [*c]const u8) callconv(.c) void {}
+
+fn outputDescription(_: ?*anyopaque, _: ?*h.wl_output, _: [*c]const u8) callconv(.c) void {}

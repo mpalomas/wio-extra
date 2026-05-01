@@ -52,13 +52,28 @@ pub fn build(b: *std.Build) !void {
     });
     test_module.addOptions("build_options", options);
 
-    const tests = b.addTest(.{
+    const gamepad_tests = b.addTest(.{
         .root_module = test_module,
     });
 
-    const run_tests = b.addRunArtifact(tests);
-    const test_step = b.step("test", "Run gamepad layer tests");
-    test_step.dependOn(&run_tests.step);
+    const display_test_module = b.createModule(.{
+        .root_source_file = b.path("src/display_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const display_test_options = b.addOptions();
+    display_test_options.addOption(bool, "wayland", false);
+    display_test_module.addOptions("build_options", display_test_options);
+
+    const display_tests = b.addTest(.{
+        .root_module = display_test_module,
+    });
+
+    const run_gamepad_tests = b.addRunArtifact(gamepad_tests);
+    const run_display_tests = b.addRunArtifact(display_tests);
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_gamepad_tests.step);
+    test_step.dependOn(&run_display_tests.step);
 
     if (enable_drop) module.addCMacro("WIO_DROP", "");
     if (enable_framebuffer) module.addCMacro("WIO_FRAMEBUFFER", "");
