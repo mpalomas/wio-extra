@@ -9,6 +9,12 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    const wiox_module = b.addModule("wiox", .{
+        .root_source_file = b.path("src/wiox.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    wiox_module.addImport("wio", module);
 
     const enable_drop = b.option(bool, "enable_drop", "Enable drag-and-drop support (default: false)") orelse false;
     const enable_framebuffer = b.option(bool, "enable_framebuffer", "Enable software framebuffer support (default: false)") orelse false;
@@ -45,31 +51,44 @@ pub fn build(b: *std.Build) !void {
     options.addOption(bool, "system_integration", system_integration);
     module.addOptions("build_options", options);
 
-    const test_module = b.createModule(.{
-        .root_source_file = b.path("src/gamepad.zig"),
+    const wiox_options = b.addOptions();
+    wiox_options.addOption(bool, "wayland", enable_wayland);
+    wiox_options.addOption(bool, "display_force_stub", false);
+    wiox_module.addOptions("build_options", wiox_options);
+
+    const gamepad_test_module = b.createModule(.{
+        .root_source_file = b.path("src/wiox/gamepad.zig"),
         .target = target,
         .optimize = optimize,
     });
-    test_module.addOptions("build_options", options);
+    gamepad_test_module.addImport("wio", module);
 
     const gamepad_tests = b.addTest(.{
-        .root_module = test_module,
+        .root_module = gamepad_test_module,
     });
 
-    const display_test_module = b.createModule(.{
-        .root_source_file = b.path("src/display_tests.zig"),
+    const wiox_display_test_options = b.addOptions();
+    wiox_display_test_options.addOption(bool, "wayland", enable_wayland);
+    wiox_display_test_options.addOption(bool, "display_force_stub", true);
+
+    const wiox_display_test_module = b.createModule(.{
+        .root_source_file = b.path("src/wiox/display.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const display_test_options = b.addOptions();
-    display_test_options.addOption(bool, "wayland", false);
-    display_test_module.addOptions("build_options", display_test_options);
+    wiox_display_test_module.addOptions("build_options", wiox_display_test_options);
 
-    const display_tests = b.addTest(.{
-        .root_module = display_test_module,
+    const display_test_root = b.createModule(.{
+        .root_source_file = b.path("src/wiox_display_tests.zig"),
+        .target = target,
+        .optimize = optimize,
     });
+    display_test_root.addImport("wiox_display", wiox_display_test_module);
 
     const run_gamepad_tests = b.addRunArtifact(gamepad_tests);
+    const display_tests = b.addTest(.{
+        .root_module = display_test_root,
+    });
     const run_display_tests = b.addRunArtifact(display_tests);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_gamepad_tests.step);
@@ -90,10 +109,12 @@ pub fn build(b: *std.Build) !void {
         .windows => {
             if (b.lazyDependency("win32", .{ .target = target, .optimize = optimize })) |win32| {
                 module.addImport("win32", win32.module("win32"));
+                wiox_module.addImport("win32", win32.module("win32"));
             }
 
             module.linkSystemLibrary("user32", .{});
             module.linkSystemLibrary("shell32", .{});
+            wiox_module.linkSystemLibrary("shcore", .{});
             if (enable_drop or enable_audio) {
                 module.linkSystemLibrary("ole32", .{});
             }
@@ -112,15 +133,21 @@ pub fn build(b: *std.Build) !void {
         },
         .macos => {
             module.addCSourceFile(.{ .file = b.path("src/macos.m"), .flags = &.{ "-fobjc-arc", "-Wno-deprecated-declarations" } });
+            wiox_module.addCSourceFile(.{ .file = b.path("src/wiox/macos_display.m"), .flags = &.{ "-fobjc-arc", "-Wno-deprecated-declarations" } });
 
             if (b.lazyDependency("xcode_frameworks", .{})) |xcode_frameworks| {
                 module.addSystemFrameworkPath(xcode_frameworks.path("Frameworks"));
                 module.addSystemIncludePath(xcode_frameworks.path("include"));
                 module.addLibraryPath(xcode_frameworks.path("lib"));
+                wiox_module.addSystemFrameworkPath(xcode_frameworks.path("Frameworks"));
+                wiox_module.addSystemIncludePath(xcode_frameworks.path("include"));
+                wiox_module.addLibraryPath(xcode_frameworks.path("lib"));
             }
 
             module.linkFramework("Cocoa", .{});
             module.linkFramework("CoreVideo", .{});
+            wiox_module.linkFramework("Cocoa", .{});
+            wiox_module.linkFramework("CoreVideo", .{});
             if (enable_vulkan) {
                 module.linkFramework("QuartzCore", .{});
             }
@@ -239,6 +266,7 @@ pub fn build(b: *std.Build) !void {
                 }
                 translate_c.addIncludePath(b.path("src/unix/protocols"));
                 module.addImport("c", translate_c.createModule());
+                wiox_module.addImport("c", translate_c.createModule());
 
                 if (system_integration) {
                     if (enable_x11) {

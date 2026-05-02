@@ -1,7 +1,10 @@
 const std = @import("std");
+const wio = @import("wio");
 const w = @import("win32");
-const internal = @import("wio.internal.zig");
-const types = @import("display_types.zig");
+const types = @import("types.zig");
+const internal = wio.internal;
+
+pub fn deinit() void {}
 
 pub const DisplayIterator = struct {
     monitors: []w.HMONITOR,

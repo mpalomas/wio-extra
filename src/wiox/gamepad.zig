@@ -1,5 +1,6 @@
 const std = @import("std");
-const wio = @import("wio.zig");
+const builtin = @import("builtin");
+const wio = @import("wio");
 
 fn enumCount(comptime T: type) usize {
     return std.meta.fields(T).len;
@@ -12,6 +13,27 @@ fn buttonIndex(button: GamepadButton) usize {
 fn axisIndex(axis: GamepadAxis) usize {
     return @intFromEnum(axis);
 }
+
+pub const DeviceBackend = enum {
+    linux_evdev,
+    windows_rawinput,
+    windows_xinput,
+    macos_iokit,
+    wasm_web,
+    haiku,
+    unknown,
+};
+
+pub const DeviceInfo = struct {
+    backend: DeviceBackend,
+    bus: ?u16 = null,
+    vendor: ?u16 = null,
+    product: ?u16 = null,
+    version: ?u16 = null,
+    guid_crc: ?u16 = null,
+    driver_signature: ?u8 = null,
+    driver_data: ?u8 = null,
+};
 
 pub const GamepadButton = enum(u8) {
     south,
@@ -260,7 +282,7 @@ pub const Database = struct {
 pub const DeviceIdentity = struct {
     runtime_id: []u8,
     name: []u8,
-    info: ?wio.JoystickInfo,
+    info: ?DeviceInfo,
     sdl_guid: []u8,
 
     pub fn deinit(self: *DeviceIdentity, allocator: std.mem.Allocator) void {
@@ -276,8 +298,6 @@ pub const GamepadDevice = struct {
     mapping: *const Mapping,
     joystick: wio.Joystick,
 
-    /// The `Database` used here must outlive the returned handle because the
-    /// selected mapping is borrowed, not copied.
     pub fn open(allocator: std.mem.Allocator, device: wio.JoystickDevice, db: *const Database) !GamepadDevice {
         var identity = try identifyDevice(allocator, device);
         errdefer identity.deinit(allocator);
@@ -313,7 +333,7 @@ pub fn identifyDevice(allocator: std.mem.Allocator, device: wio.JoystickDevice) 
     const name = try allocator.dupe(u8, raw_name);
     errdefer allocator.free(name);
 
-    const info = device.getInfo();
+    const info = inspectDeviceInfo(device, runtime_id);
     const sdl_guid = try createSdlGuidString(allocator, info, name);
     errdefer allocator.free(sdl_guid);
 
@@ -390,7 +410,7 @@ fn parseEntry(allocator: std.mem.Allocator, mapping: *Mapping, piece: []const u8
 const sdl_bus_unknown: u16 = 0x00;
 const sdl_bus_usb: u16 = 0x03;
 
-fn createSdlGuidString(allocator: std.mem.Allocator, info: ?wio.JoystickInfo, name: []const u8) ![]u8 {
+fn createSdlGuidString(allocator: std.mem.Allocator, info: ?DeviceInfo, name: []const u8) ![]u8 {
     if (info) |raw| {
         if (raw.backend == .windows_xinput) {
             return allocator.dupe(u8, "xinput");
@@ -422,6 +442,73 @@ fn createSdlGuidString(allocator: std.mem.Allocator, info: ?wio.JoystickInfo, na
     const copied = @min(name.len, guid.len - 4);
     @memcpy(guid[4 .. 4 + copied], name[0..copied]);
     return hexEncodeGuid(allocator, &guid);
+}
+
+fn inspectDeviceInfo(device: wio.JoystickDevice, runtime_id: []const u8) ?DeviceInfo {
+    return switch (builtin.os.tag) {
+        .windows => inspectWindowsDeviceInfo(device, runtime_id),
+        .macos => inspectMacosDeviceInfo(runtime_id),
+        .linux => if (builtin.target.abi.isAndroid()) .{ .backend = .unknown } else inspectLinuxDeviceInfo(device, runtime_id),
+        .haiku => .{ .backend = .haiku },
+        else => if (builtin.target.cpu.arch.isWasm()) .{ .backend = .wasm_web } else .{ .backend = .unknown },
+    };
+}
+
+fn inspectWindowsDeviceInfo(device: wio.JoystickDevice, runtime_id: []const u8) ?DeviceInfo {
+    return switch (device.backend) {
+        .rawinput => .{
+            .backend = .windows_rawinput,
+            .bus = sdl_bus_usb,
+            .vendor = parseInterfaceHex(runtime_id, "VID_"),
+            .product = parseInterfaceHex(runtime_id, "PID_"),
+            .version = parseInterfaceHex(runtime_id, "REV_"),
+            .driver_signature = 'r',
+        },
+        .xinput => .{
+            .backend = .windows_xinput,
+            .bus = sdl_bus_usb,
+            .driver_signature = 'x',
+        },
+    };
+}
+
+fn inspectMacosDeviceInfo(runtime_id: []const u8) ?DeviceInfo {
+    return .{
+        .backend = .macos_iokit,
+        .bus = sdl_bus_usb,
+        .vendor = parseHexWord(runtime_id, 0),
+        .product = parseHexWord(runtime_id, 4),
+        .version = parseHexWord(runtime_id, 8),
+    };
+}
+
+fn inspectLinuxDeviceInfo(device: wio.JoystickDevice, runtime_id: []const u8) ?DeviceInfo {
+    var info: linux_input_id = undefined;
+    if (std.os.linux.ioctl(device.backend.fd, linux_eviocgid, @intFromPtr(&info)) != 0) return .{
+        .backend = .linux_evdev,
+        .vendor = parseHexWord(runtime_id, 0),
+        .product = parseHexWord(runtime_id, 4),
+        .version = parseHexWord(runtime_id, 8),
+    };
+    return .{
+        .backend = .linux_evdev,
+        .bus = info.bustype,
+        .vendor = info.vendor,
+        .product = info.product,
+        .version = info.version,
+    };
+}
+
+fn parseInterfaceHex(interface: []const u8, prefix: []const u8) ?u16 {
+    const start = std.mem.indexOf(u8, interface, prefix) orelse return null;
+    const hex_start = start + prefix.len;
+    if (hex_start + 4 > interface.len) return null;
+    return std.fmt.parseUnsigned(u16, interface[hex_start .. hex_start + 4], 16) catch null;
+}
+
+fn parseHexWord(text: []const u8, start: usize) ?u16 {
+    if (start + 4 > text.len) return null;
+    return std.fmt.parseUnsigned(u16, text[start .. start + 4], 16) catch null;
 }
 
 fn writeLe16(out: []u8, value: u16) void {
@@ -656,7 +743,7 @@ test "sdl db compatibility sweep for common controller families" {
     _ = try db.addMappingsFromText(allocator, subset);
 
     const cases = [_]struct {
-        info: wio.JoystickInfo,
+        info: DeviceInfo,
         name: []const u8,
         expected: []const u8,
     }{
@@ -920,5 +1007,13 @@ fn hatMatches(hat: anytype, mask: u4) bool {
         .down = hat.down,
         .left = hat.left,
     });
-    return (actual & mask) == mask;
+    return actual == mask;
 }
+
+const linux_eviocgid = 2148025602;
+const linux_input_id = extern struct {
+    bustype: u16,
+    vendor: u16,
+    product: u16,
+    version: u16,
+};

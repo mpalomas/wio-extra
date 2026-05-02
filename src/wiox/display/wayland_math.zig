@@ -1,5 +1,5 @@
 const std = @import("std");
-const types = @import("../display_types.zig");
+const types = @import("types.zig");
 
 pub const OutputState = struct {
     x: i32 = 0,

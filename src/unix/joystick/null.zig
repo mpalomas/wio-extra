@@ -34,9 +34,6 @@ pub const JoystickDevice = struct {
         return error.Unexpected;
     }
 
-    pub fn getInfo(_: JoystickDevice) ?wio.JoystickInfo {
-        return null;
-    }
 };
 
 pub const Joystick = struct {

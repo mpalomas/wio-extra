@@ -1,29 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 pub const build_options = @import("build_options");
-const internal = @import("wio.internal.zig");
-pub const gamepad = @import("gamepad.zig");
-
-pub const JoystickBackend = enum {
-    linux_evdev,
-    windows_rawinput,
-    windows_xinput,
-    macos_iokit,
-    wasm_web,
-    haiku,
-    unknown,
-};
-
-pub const JoystickInfo = struct {
-    backend: JoystickBackend,
-    bus: ?u16 = null,
-    vendor: ?u16 = null,
-    product: ?u16 = null,
-    version: ?u16 = null,
-    guid_crc: ?u16 = null,
-    driver_signature: ?u8 = null,
-    driver_data: ?u8 = null,
-};
+pub const internal = @import("wio.internal.zig");
 
 pub const backend = switch (builtin.os.tag) {
     .windows => @import("win32.zig"),
@@ -207,14 +185,6 @@ pub const Window = struct {
 
     pub fn setCursor(self: *Window, cursor: Cursor) void {
         self.backend.setCursor(cursor);
-    }
-
-    pub fn getDisplay(self: *Window) ?Display {
-        const Backend = std.meta.Child(@TypeOf(self.backend));
-        if (@hasDecl(Backend, "getDisplay")) {
-            return self.backend.getDisplay();
-        }
-        return null;
     }
 
     pub fn requestAttention(self: *Window) void {
@@ -406,9 +376,6 @@ pub const JoystickDevice = struct {
         return self.backend.getName(allocator) catch "";
     }
 
-    pub fn getInfo(self: JoystickDevice) ?JoystickInfo {
-        return self.backend.getInfo();
-    }
 };
 
 pub const Joystick = struct {
@@ -739,11 +706,3 @@ fn assertFeature(feature: anytype) void {
         @compileError("feature '" ++ @tagName(feature) ++ "' is disabled");
     }
 }
-
-const display = @import("display.zig");
-
-pub const Bounds = display.Bounds;
-pub const RefreshRate = display.RefreshRate;
-pub const DisplayMode = display.DisplayMode;
-pub const DisplayIterator = display.DisplayIterator;
-pub const Display = display.Display;

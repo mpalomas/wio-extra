@@ -354,11 +354,6 @@ pub const JoystickDevice = struct {
         return allocator.dupe(u8, std.mem.sliceTo(&self.name, 0));
     }
 
-    pub fn getInfo(_: JoystickDevice) ?wio.JoystickInfo {
-        return .{
-            .backend = .haiku,
-        };
-    }
 };
 
 pub const Joystick = struct {

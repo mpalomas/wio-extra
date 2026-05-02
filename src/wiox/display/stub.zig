@@ -1,4 +1,6 @@
-const types = @import("display_types.zig");
+const types = @import("types.zig");
+
+pub fn deinit() void {}
 
 pub const DisplayIterator = struct {
     pub fn init() DisplayIterator {

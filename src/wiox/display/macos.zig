@@ -1,23 +1,27 @@
 const std = @import("std");
-const internal = @import("wio.internal.zig");
-const types = @import("display_types.zig");
+const wio = @import("wio");
+const internal = wio.internal;
+const types = @import("types.zig");
 
-extern fn wioGetDisplayCount() u32;
-extern fn wioGetDisplayIds([*]c.CGDirectDisplayID, u32) u32;
-extern fn wioGetDisplayBounds(c.CGDirectDisplayID, *i32, *i32, *u32, *u32) u8;
-extern fn wioGetDisplayUsableBounds(c.CGDirectDisplayID, *i32, *i32, *u32, *u32) u8;
-extern fn wioGetDisplayContentScale(c.CGDirectDisplayID) f64;
+extern fn wioxGetDisplayCount() u32;
+extern fn wioxGetDisplayIds([*]c.CGDirectDisplayID, u32) u32;
+extern fn wioxGetDisplayBounds(c.CGDirectDisplayID, *i32, *i32, *u32, *u32) u8;
+extern fn wioxGetDisplayUsableBounds(c.CGDirectDisplayID, *i32, *i32, *u32, *u32) u8;
+extern fn wioxGetDisplayContentScale(c.CGDirectDisplayID) f64;
+extern fn wioxGetWindowDisplay(*anyopaque, *c.CGDirectDisplayID) u8;
+
+pub fn deinit() void {}
 
 pub const DisplayIterator = struct {
     ids: []c.CGDirectDisplayID = &.{},
     index: usize = 0,
 
     pub fn init() DisplayIterator {
-        const count = wioGetDisplayCount();
+        const count = wioxGetDisplayCount();
         if (count == 0) return .{};
 
         const ids = internal.allocator.alloc(c.CGDirectDisplayID, count) catch return .{};
-        const len = wioGetDisplayIds(ids.ptr, count);
+        const len = wioxGetDisplayIds(ids.ptr, count);
         return .{ .ids = ids[0..len] };
     }
 
@@ -54,21 +58,27 @@ pub const Display = struct {
     }
 
     pub fn getBounds(self: Display) ?types.Bounds {
-        return getBoundsWith(wioGetDisplayBounds, self.id);
+        return getBoundsWith(wioxGetDisplayBounds, self.id);
     }
 
     pub fn getUsableBounds(self: Display) ?types.Bounds {
-        return getBoundsWith(wioGetDisplayUsableBounds, self.id);
+        return getBoundsWith(wioxGetDisplayUsableBounds, self.id);
     }
 
     pub fn getContentScale(self: Display) f64 {
-        return wioGetDisplayContentScale(self.id);
+        return wioxGetDisplayContentScale(self.id);
     }
 
     pub fn getRefreshRate(self: Display) types.RefreshRate {
         return exactRefreshRate(self.id) orelse fallbackRefreshRate(self.id);
     }
 };
+
+pub fn getWindowDisplay(window: *wio.Window) ?Display {
+    var id: c.CGDirectDisplayID = undefined;
+    if (wioxGetWindowDisplay(window.backend.window, &id) == 0) return null;
+    return .{ .id = id };
+}
 
 fn getBoundsWith(
     comptime func: *const fn (c.CGDirectDisplayID, *i32, *i32, *u32, *u32) callconv(.c) u8,

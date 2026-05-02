@@ -2,7 +2,6 @@ const std = @import("std");
 const build_options = @import("build_options");
 const wio = @import("wio.zig");
 const internal = @import("wio.internal.zig");
-const display = @import("macos_display.zig");
 const log = std.log.scoped(.wio);
 
 const NSWindow = opaque {};
@@ -26,7 +25,6 @@ extern fn wioSetTitle(*NSWindow, [*]const u8, usize) void;
 extern fn wioSetMode(*NSWindow, u8) void;
 extern fn wioSetSize(*NSWindow, u16, u16) void;
 extern fn wioSetCursor(*NSWindow, u8) void;
-extern fn wioGetWindowDisplay(*NSWindow, *@FieldType(display.Display, "id")) u8;
 extern fn wioRequestAttention() void;
 extern fn wioSetClipboardText([*]const u8, usize) void;
 extern fn wioGetClipboardText(*const std.mem.Allocator, *usize) ?[*]u8;
@@ -292,12 +290,6 @@ pub const Window = struct {
         wioSetCursor(self.window, @intFromEnum(shape));
     }
 
-    pub fn getDisplay(self: *Window) ?display.Display {
-        var id: @FieldType(display.Display, "id") = undefined;
-        if (wioGetWindowDisplay(self.window, &id) == 0) return null;
-        return .{ .id = id };
-    }
-
     pub fn requestAttention(_: *Window) void {
         wioRequestAttention();
     }
@@ -538,26 +530,6 @@ pub const JoystickDevice = struct {
         return cfStringToUtf8(allocator, @ptrCast(c.IOHIDDeviceGetProperty(self.device, wioHIDProductKey)));
     }
 
-    pub fn getInfo(self: JoystickDevice) ?wio.JoystickInfo {
-        const vendor_cf = c.IOHIDDeviceGetProperty(self.device, wioHIDVendorIDKey) orelse return null;
-        const product_cf = c.IOHIDDeviceGetProperty(self.device, wioHIDProductIDKey) orelse return null;
-        const version_cf = c.IOHIDDeviceGetProperty(self.device, wioHIDVersionNumberKey) orelse return null;
-
-        var vendor: u32 = undefined;
-        _ = c.CFNumberGetValue(@ptrCast(vendor_cf), c.kCFNumberSInt32Type, &vendor);
-        var product: u32 = undefined;
-        _ = c.CFNumberGetValue(@ptrCast(product_cf), c.kCFNumberSInt32Type, &product);
-        var version: u32 = undefined;
-        _ = c.CFNumberGetValue(@ptrCast(version_cf), c.kCFNumberSInt32Type, &version);
-
-        return .{
-            .backend = .macos_iokit,
-            .bus = 0x03,
-            .vendor = @intCast(vendor),
-            .product = @intCast(product),
-            .version = @intCast(version),
-        };
-    }
 };
 
 pub const Joystick = struct {

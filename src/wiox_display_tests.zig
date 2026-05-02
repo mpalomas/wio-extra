@@ -1,15 +1,10 @@
 const std = @import("std");
 
-const display = @import("display.zig");
-const stub = @import("display_stub.zig");
-const types = @import("display_types.zig");
-
-comptime {
-    _ = @import("unix/wayland_display_math.zig");
-}
+const display = @import("wiox_display");
+const stub = display.stub;
 
 test "refresh rate default represents unknown" {
-    const rate = types.RefreshRate{};
+    const rate = display.RefreshRate{};
 
     try std.testing.expectEqual(@as(f64, 0), rate.hz);
     try std.testing.expectEqual(@as(u32, 0), rate.numerator);
@@ -17,7 +12,7 @@ test "refresh rate default represents unknown" {
 }
 
 test "display mode carries geometry scale and refresh data" {
-    const mode = types.DisplayMode{
+    const mode = display.DisplayMode{
         .bounds = .{ .x = -1920, .y = 0, .width = 1920, .height = 1080 },
         .usable_bounds = .{ .x = -1920, .y = 24, .width = 1920, .height = 1056 },
         .content_scale = 2.0,
@@ -45,11 +40,11 @@ test "stub backend satisfies display API contract" {
 
     const stub_display = stub.Display{};
     stub_display.release();
-    try std.testing.expectEqual(@as(?types.DisplayMode, null), stub_display.getCurrentMode());
-    try std.testing.expectEqual(@as(?types.Bounds, null), stub_display.getBounds());
-    try std.testing.expectEqual(@as(?types.Bounds, null), stub_display.getUsableBounds());
+    try std.testing.expectEqual(@as(?display.DisplayMode, null), stub_display.getCurrentMode());
+    try std.testing.expectEqual(@as(?display.Bounds, null), stub_display.getBounds());
+    try std.testing.expectEqual(@as(?display.Bounds, null), stub_display.getUsableBounds());
     try std.testing.expectEqual(@as(f64, 0), stub_display.getContentScale());
-    try std.testing.expectEqual(types.RefreshRate{}, stub_display.getRefreshRate());
+    try std.testing.expectEqual(display.RefreshRate{}, stub_display.getRefreshRate());
 }
 
 test "display backend exposes required API shape" {
@@ -57,12 +52,16 @@ test "display backend exposes required API shape" {
     comptime assertDisplayApi(stub.DisplayIterator, stub.Display);
 }
 
+test "wayland display math compiles through sidecar module" {
+    _ = display.wayland_math;
+}
+
 fn assertDisplayApi(comptime DisplayIterator: type, comptime Display: type) void {
     const iterator = @typeInfo(@TypeOf(DisplayIterator.init)).@"fn";
     if (iterator.return_type.? != DisplayIterator) @compileError("DisplayIterator.init must return DisplayIterator");
 
-    const deinit = @typeInfo(@TypeOf(DisplayIterator.deinit)).@"fn";
-    if (deinit.params.len != 1 or deinit.params[0].type.? != *DisplayIterator or deinit.return_type.? != void) {
+    const deinit_fn = @typeInfo(@TypeOf(DisplayIterator.deinit)).@"fn";
+    if (deinit_fn.params.len != 1 or deinit_fn.params[0].type.? != *DisplayIterator or deinit_fn.return_type.? != void) {
         @compileError("DisplayIterator.deinit must be fn (*DisplayIterator) void");
     }
 
@@ -77,17 +76,17 @@ fn assertDisplayApi(comptime DisplayIterator: type, comptime Display: type) void
     }
 
     const get_current_mode = @typeInfo(@TypeOf(Display.getCurrentMode)).@"fn";
-    if (get_current_mode.params.len != 1 or get_current_mode.params[0].type.? != Display or get_current_mode.return_type.? != ?types.DisplayMode) {
+    if (get_current_mode.params.len != 1 or get_current_mode.params[0].type.? != Display or get_current_mode.return_type.? != ?display.DisplayMode) {
         @compileError("Display.getCurrentMode must be fn (Display) ?DisplayMode");
     }
 
     const get_bounds = @typeInfo(@TypeOf(Display.getBounds)).@"fn";
-    if (get_bounds.params.len != 1 or get_bounds.params[0].type.? != Display or get_bounds.return_type.? != ?types.Bounds) {
+    if (get_bounds.params.len != 1 or get_bounds.params[0].type.? != Display or get_bounds.return_type.? != ?display.Bounds) {
         @compileError("Display.getBounds must be fn (Display) ?Bounds");
     }
 
     const get_usable_bounds = @typeInfo(@TypeOf(Display.getUsableBounds)).@"fn";
-    if (get_usable_bounds.params.len != 1 or get_usable_bounds.params[0].type.? != Display or get_usable_bounds.return_type.? != ?types.Bounds) {
+    if (get_usable_bounds.params.len != 1 or get_usable_bounds.params[0].type.? != Display or get_usable_bounds.return_type.? != ?display.Bounds) {
         @compileError("Display.getUsableBounds must be fn (Display) ?Bounds");
     }
 
@@ -97,7 +96,7 @@ fn assertDisplayApi(comptime DisplayIterator: type, comptime Display: type) void
     }
 
     const get_refresh_rate = @typeInfo(@TypeOf(Display.getRefreshRate)).@"fn";
-    if (get_refresh_rate.params.len != 1 or get_refresh_rate.params[0].type.? != Display or get_refresh_rate.return_type.? != types.RefreshRate) {
+    if (get_refresh_rate.params.len != 1 or get_refresh_rate.params[0].type.? != Display or get_refresh_rate.return_type.? != display.RefreshRate) {
         @compileError("Display.getRefreshRate must be fn (Display) RefreshRate");
     }
 }

@@ -297,11 +297,6 @@ pub const JoystickDevice = struct {
         return self.getId(allocator);
     }
 
-    pub fn getInfo(_: JoystickDevice) ?wio.JoystickInfo {
-        return .{
-            .backend = .wasm_web,
-        };
-    }
 };
 
 pub const Joystick = struct {

@@ -4,7 +4,6 @@ const h = @import("c");
 const wio = @import("../wio.zig");
 const internal = @import("../wio.internal.zig");
 const unix = @import("../unix.zig");
-const display_api = @import("wayland_display.zig");
 const DynLib = @import("DynLib.zig");
 const log = std.log.scoped(.wio);
 
@@ -176,8 +175,6 @@ pub fn init() !bool {
 
     display = c.wl_display_connect(null) orelse return false;
     errdefer c.wl_display_disconnect(display);
-    display_api.init();
-    errdefer display_api.deinit();
     try unix.pollfds.append(internal.allocator, .{ .fd = c.wl_display_get_fd(display), .events = std.c.POLL.IN, .revents = undefined });
 
     xkb = c.xkb_context_new(h.XKB_CONTEXT_NO_FLAGS) orelse return error.Unexpected;
@@ -191,7 +188,6 @@ pub fn init() !bool {
     registry = h.wl_display_get_registry(display) orelse return error.Unexpected;
     errdefer destroyProxies();
     _ = h.wl_registry_add_listener(registry, &registry_listener, null);
-    _ = c.wl_display_roundtrip(display);
     _ = c.wl_display_roundtrip(display);
     if (compositor == null) return error.Unexpected;
 
@@ -244,7 +240,6 @@ pub fn deinit() void {
     libxkbcommon.close();
 
     destroyProxies();
-    display_api.deinit();
     c.wl_display_disconnect(display);
     libwayland_client.close();
 }
@@ -819,16 +814,10 @@ fn registryGlobal(_: ?*anyopaque, _: ?*h.wl_registry, name: u32, interface_ptr: 
         data_device_manager = @ptrCast(h.wl_registry_bind(registry, name, &h.wl_data_device_manager_interface, @min(version, 1)));
     } else if (std.mem.eql(u8, interface, "xdg_activation_v1")) {
         activation = @ptrCast(h.wl_registry_bind(registry, name, &h.xdg_activation_v1_interface, @min(version, 1)));
-    } else if (std.mem.eql(u8, interface, "wl_output")) {
-        display_api.bind(registry, name, version);
-    } else if (std.mem.eql(u8, interface, "zxdg_output_manager_v1")) {
-        display_api.bindXdgOutputManager(registry, name, version);
     }
 }
 
-fn registryGlobalRemove(_: ?*anyopaque, _: ?*h.wl_registry, name: u32) callconv(.c) void {
-    display_api.remove(name);
-}
+fn registryGlobalRemove(_: ?*anyopaque, _: ?*h.wl_registry, _: u32) callconv(.c) void {}
 
 const seat_listener = h.wl_seat_listener{
     .capabilities = seatCapabilities,
