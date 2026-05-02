@@ -2,6 +2,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const wio = @import("wio.zig");
 const internal = @import("wio.internal.zig");
+const display = @import("macos_display.zig");
 const log = std.log.scoped(.wio);
 
 const NSWindow = opaque {};
@@ -25,6 +26,7 @@ extern fn wioSetTitle(*NSWindow, [*]const u8, usize) void;
 extern fn wioSetMode(*NSWindow, u8) void;
 extern fn wioSetSize(*NSWindow, u16, u16) void;
 extern fn wioSetCursor(*NSWindow, u8) void;
+extern fn wioGetWindowDisplay(*NSWindow, *c.CGDirectDisplayID) u8;
 extern fn wioRequestAttention() void;
 extern fn wioSetClipboardText([*]const u8, usize) void;
 extern fn wioGetClipboardText(*const std.mem.Allocator, *usize) ?[*]u8;
@@ -288,6 +290,12 @@ pub const Window = struct {
 
     pub fn setCursor(self: *Window, shape: wio.Cursor) void {
         wioSetCursor(self.window, @intFromEnum(shape));
+    }
+
+    pub fn getDisplay(self: *Window) ?display.Display {
+        var id: c.CGDirectDisplayID = undefined;
+        if (wioGetWindowDisplay(self.window, &id) == 0) return null;
+        return .{ .id = id };
     }
 
     pub fn requestAttention(_: *Window) void {

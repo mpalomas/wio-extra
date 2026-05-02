@@ -685,3 +685,14 @@ double wioGetDisplayContentScale(CGDirectDisplayID displayId) {
     NSScreen *screen = wioGetScreen(displayId);
     return screen ? [screen backingScaleFactor] : 0.0;
 }
+
+uint8_t wioGetWindowDisplay(NSWindow *window, CGDirectDisplayID *displayId) {
+    NSScreen *screen = [window screen];
+    if (!screen) return 0;
+
+    NSNumber *number = [[screen deviceDescription] objectForKey:@"NSScreenNumber"];
+    if (!number) return 0;
+
+    *displayId = [number unsignedIntValue];
+    return 1;
+}

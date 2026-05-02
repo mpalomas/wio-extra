@@ -209,6 +209,13 @@ pub const Window = struct {
         self.backend.setCursor(cursor);
     }
 
+    pub fn getDisplay(self: *Window) ?Display {
+        if (@hasDecl(@TypeOf(self.backend), "getDisplay")) {
+            return self.backend.getDisplay();
+        }
+        return null;
+    }
+
     pub fn requestAttention(self: *Window) void {
         self.backend.requestAttention();
     }
