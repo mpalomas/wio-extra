@@ -210,7 +210,8 @@ pub const Window = struct {
     }
 
     pub fn getDisplay(self: *Window) ?Display {
-        if (@hasDecl(@TypeOf(self.backend), "getDisplay")) {
+        const Backend = std.meta.Child(@TypeOf(self.backend));
+        if (@hasDecl(Backend, "getDisplay")) {
             return self.backend.getDisplay();
         }
         return null;

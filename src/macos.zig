@@ -26,7 +26,7 @@ extern fn wioSetTitle(*NSWindow, [*]const u8, usize) void;
 extern fn wioSetMode(*NSWindow, u8) void;
 extern fn wioSetSize(*NSWindow, u16, u16) void;
 extern fn wioSetCursor(*NSWindow, u8) void;
-extern fn wioGetWindowDisplay(*NSWindow, *c.CGDirectDisplayID) u8;
+extern fn wioGetWindowDisplay(*NSWindow, *@FieldType(display.Display, "id")) u8;
 extern fn wioRequestAttention() void;
 extern fn wioSetClipboardText([*]const u8, usize) void;
 extern fn wioGetClipboardText(*const std.mem.Allocator, *usize) ?[*]u8;
@@ -293,7 +293,7 @@ pub const Window = struct {
     }
 
     pub fn getDisplay(self: *Window) ?display.Display {
-        var id: c.CGDirectDisplayID = undefined;
+        var id: @FieldType(display.Display, "id") = undefined;
         if (wioGetWindowDisplay(self.window, &id) == 0) return null;
         return .{ .id = id };
     }
