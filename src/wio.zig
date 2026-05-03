@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 pub const build_options = @import("build_options");
-const internal = @import("wio.internal.zig");
+pub const internal = @import("wio.internal.zig");
 pub const backend = switch (builtin.os.tag) {
     .windows => @import("win32.zig"),
     .macos => @import("macos.zig"),
