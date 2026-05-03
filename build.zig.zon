@@ -1,7 +1,7 @@
 .{
-    .name = .wio,
+    .name = .wio_extra,
     .version = "0.0.0",
-    .fingerprint = 0xc7cd0be0afeb11f3,
+    .fingerprint = 0xb6547d74a46c1a3c,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .win32 = .{
