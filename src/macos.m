@@ -20,6 +20,7 @@ extern void wioMouse(void *, UInt16, UInt16);
 extern void wioMouseRelative(void *, SInt16, SInt16);
 extern void wioMouseLeave(void *);
 extern void wioScroll(void *, Float32, Float32);
+extern void wioDisplayLink(void *, Float64, Float64);
 extern char *wioDupeClipboardText(const void *, const char *, size_t *);
 
 static NSString *string(const char *ptr, size_t len) {
@@ -42,6 +43,19 @@ static void warpCursor(NSWindow *window) {
 - (BOOL)relativeMouse;
 @end
 
+@interface WioDisplayLinkTarget : NSObject
+- (instancetype)initWithZigDisplayLink:(void *)value;
+- (void)displayLinkFired:(CADisplayLink *)sender;
+- (void)resetTiming;
+@end
+
+@interface WioDisplayLink : NSObject
+- (instancetype)initWithWindow:(NSWindow *)window zigDisplayLink:(void *)zig preferredFrameRateHz:(double)preferredFrameRateHz;
+- (void)start;
+- (void)stop;
+- (void)destroy;
+@end
+
 @implementation WioApplicationDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
@@ -56,6 +70,72 @@ static void warpCursor(NSWindow *window) {
         }
     }
     return NSTerminateCancel;
+}
+
+@end
+
+@implementation WioDisplayLinkTarget {
+    void *zig;
+    CFTimeInterval lastTimestamp;
+}
+
+- (instancetype)initWithZigDisplayLink:(void *)value {
+    self = [super init];
+    zig = value;
+    lastTimestamp = 0.0;
+    return self;
+}
+
+- (void)resetTiming {
+    lastTimestamp = 0.0;
+}
+
+- (void)displayLinkFired:(CADisplayLink *)sender {
+    CFTimeInterval timestamp = [sender timestamp];
+    CFTimeInterval duration = 0.0;
+    if (lastTimestamp > 0.0) {
+        duration = timestamp - lastTimestamp;
+    } else if ([sender targetTimestamp] > timestamp) {
+        duration = [sender targetTimestamp] - timestamp;
+    }
+    lastTimestamp = timestamp;
+    wioDisplayLink(zig, timestamp, duration);
+}
+
+@end
+
+@implementation WioDisplayLink {
+    WioDisplayLinkTarget *target;
+    CADisplayLink *displayLink;
+}
+
+- (instancetype)initWithWindow:(NSWindow *)window zigDisplayLink:(void *)zig preferredFrameRateHz:(double)preferredFrameRateHz {
+    self = [super init];
+    target = [[WioDisplayLinkTarget alloc] initWithZigDisplayLink:zig];
+    displayLink = [[window contentView] displayLinkWithTarget:target selector:@selector(displayLinkFired:)];
+    [displayLink setPaused:YES];
+    if (preferredFrameRateHz > 0.0) {
+        CAFrameRateRange range = { preferredFrameRateHz, preferredFrameRateHz, preferredFrameRateHz };
+        [displayLink setPreferredFrameRateRange:range];
+    }
+    [displayLink addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+    return self;
+}
+
+- (void)start {
+    [target resetTiming];
+    [displayLink setPaused:NO];
+}
+
+- (void)stop {
+    [displayLink setPaused:YES];
+    [target resetTiming];
+}
+
+- (void)destroy {
+    [displayLink invalidate];
+    displayLink = nil;
+    target = nil;
 }
 
 @end
@@ -431,10 +511,14 @@ void wioUpdate(void) {
 void wioWait(NSTimeInterval timeout) {
     NSDate *until = (timeout > 0) ? [NSDate dateWithTimeIntervalSinceNow:timeout] : [NSDate distantFuture];
     NSEvent *event = [NSApp nextEventMatchingMask:NSEventMaskAny
-        untilDate:until
+        untilDate:nil
         inMode:NSDefaultRunLoopMode
         dequeue:YES];
-    [NSApp sendEvent:event];
+    if (event) {
+        [NSApp sendEvent:event];
+        return;
+    }
+    [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:until];
 }
 
 void wioCancelWait(void) {
@@ -616,6 +700,30 @@ void wioGlSwapInterval(int32_t interval) {
 }
 
 #endif
+
+void *wioCreateDisplayLink(NSWindow *window, void *zig, double preferredFrameRateHz) {
+    if (@available(macOS 14.0, *)) {
+        WioDisplayLink *displayLink = [[WioDisplayLink alloc] initWithWindow:window zigDisplayLink:zig preferredFrameRateHz:preferredFrameRateHz];
+        return (void *)CFBridgingRetain(displayLink);
+    } else {
+        return NULL;
+    }
+}
+
+void wioDestroyDisplayLink(void *ptr) {
+    WioDisplayLink *displayLink = CFBridgingRelease(ptr);
+    [displayLink destroy];
+}
+
+void wioStartDisplayLink(void *ptr) {
+    WioDisplayLink *displayLink = (__bridge WioDisplayLink *)ptr;
+    [displayLink start];
+}
+
+void wioStopDisplayLink(void *ptr) {
+    WioDisplayLink *displayLink = (__bridge WioDisplayLink *)ptr;
+    [displayLink stop];
+}
 
 #ifdef WIO_VULKAN
 

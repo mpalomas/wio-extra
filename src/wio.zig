@@ -239,6 +239,12 @@ pub const Window = struct {
         self.backend.glSwapInterval(interval);
     }
 
+    /// macOS only. Creates a display-link timing source for this window.
+    pub fn createDisplayLink(self: *Window, options: DisplayLinkOptions) !DisplayLink {
+        if (!@hasDecl(backend.Window, "createDisplayLink")) @compileError("display links are only available on macOS");
+        return .{ .backend = try self.backend.createDisplayLink(options) };
+    }
+
     /// Not available for WebAssembly or Haiku.
     pub fn vkCreateSurface(self: *Window, instance: usize, allocation_callbacks: ?*const anyopaque, surface: *u64) i32 {
         assertFeature(.vulkan);
@@ -509,6 +515,8 @@ pub const Event = union(enum) {
     touch: struct { id: u8, x: u16, y: u16 },
     touch_end: struct { id: u8, ignore: bool },
 
+    display_link: DisplayLinkFrame,
+
     drop_begin: void,
     drop_position: Position,
     drop_complete: void,
@@ -524,6 +532,42 @@ pub const WindowMode = enum {
 
 pub const TextInputOptions = struct {
     cursor: ?Position = null,
+};
+
+pub const DisplayLinkOptions = struct {
+    preferred_frame_rate_hz: f64 = 0,
+};
+
+pub const DisplayLinkFrame = struct {
+    timestamp_s: f64,
+    duration_s: f64,
+};
+
+pub const DisplayLink = struct {
+    backend: if (@hasDecl(backend.Window, "createDisplayLink"))
+        @typeInfo(@typeInfo(@TypeOf(backend.Window.createDisplayLink)).@"fn".return_type.?).error_union.payload
+    else
+        void,
+
+    pub fn destroy(self: *DisplayLink) void {
+        if (!@hasDecl(backend.Window, "createDisplayLink")) @compileError("display links are only available on macOS");
+        self.backend.destroy();
+    }
+
+    pub fn start(self: *DisplayLink) void {
+        if (!@hasDecl(backend.Window, "createDisplayLink")) @compileError("display links are only available on macOS");
+        self.backend.start();
+    }
+
+    pub fn stop(self: *DisplayLink) void {
+        if (!@hasDecl(backend.Window, "createDisplayLink")) @compileError("display links are only available on macOS");
+        self.backend.stop();
+    }
+
+    pub fn nextFrame(self: *DisplayLink) ?DisplayLinkFrame {
+        if (!@hasDecl(backend.Window, "createDisplayLink")) @compileError("display links are only available on macOS");
+        return self.backend.nextFrame();
+    }
 };
 
 /// See https://drafts.csswg.org/css-ui-4/#predefined-cursors

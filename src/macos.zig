@@ -8,6 +8,7 @@ const NSWindow = opaque {};
 const NSOpenGLPixelFormat = opaque {};
 const NSOpenGLContext = opaque {};
 const CAMetalLayer = opaque {};
+const CADisplayLink = opaque {};
 extern fn wioInit() void;
 extern fn wioUpdate() void;
 extern fn wioWait(f64) void;
@@ -36,6 +37,10 @@ extern fn wioGlMakeContextCurrent(*NSWindow, ?*NSOpenGLContext) void;
 extern fn wioGlSwapBuffers() void;
 extern fn wioGlSwapInterval(i32) void;
 extern fn wioCreateMetalLayer(*NSWindow) ?*CAMetalLayer;
+extern fn wioCreateDisplayLink(*NSWindow, *DisplayLinkState, f64) ?*CADisplayLink;
+extern fn wioDestroyDisplayLink(*CADisplayLink) void;
+extern fn wioStartDisplayLink(*CADisplayLink) void;
+extern fn wioStopDisplayLink(*CADisplayLink) void;
 extern const wioHIDDeviceUsagePageKey: c.CFStringRef;
 extern const wioHIDDeviceUsageKey: c.CFStringRef;
 extern const wioHIDVendorIDKey: c.CFStringRef;
@@ -359,6 +364,18 @@ pub const Window = struct {
         wioGlSwapInterval(interval);
     }
 
+    pub fn createDisplayLink(self: *Window, options: wio.DisplayLinkOptions) !DisplayLink {
+        const state = try internal.allocator.create(DisplayLinkState);
+        errdefer internal.allocator.destroy(state);
+
+        state.* = .{
+            .window = self,
+            .link = undefined,
+        };
+        state.link = wioCreateDisplayLink(self.window, state, options.preferred_frame_rate_hz) orelse return error.Unsupported;
+        return .{ .state = state };
+    }
+
     pub fn vkCreateSurface(self: Window, instance: usize, allocation_callbacks: ?*const anyopaque, surface: *u64) i32 {
         const VkMetalSurfaceCreateInfoEXT = extern struct {
             sType: i32 = 1000217000,
@@ -377,6 +394,35 @@ pub const Window = struct {
             surface,
         );
     }
+};
+
+pub const DisplayLink = struct {
+    state: *DisplayLinkState,
+
+    pub fn destroy(self: *DisplayLink) void {
+        wioDestroyDisplayLink(self.state.link);
+        internal.allocator.destroy(self.state);
+    }
+
+    pub fn start(self: *DisplayLink) void {
+        wioStartDisplayLink(self.state.link);
+    }
+
+    pub fn stop(self: *DisplayLink) void {
+        wioStopDisplayLink(self.state.link);
+    }
+
+    pub fn nextFrame(self: *DisplayLink) ?wio.DisplayLinkFrame {
+        const frame = self.state.pending orelse return null;
+        self.state.pending = null;
+        return frame;
+    }
+};
+
+const DisplayLinkState = struct {
+    window: *Window,
+    link: *CADisplayLink,
+    pending: ?wio.DisplayLinkFrame = null,
 };
 
 pub const Framebuffer = struct {
@@ -906,6 +952,15 @@ export fn wioMouseLeave(self: *Window) void {
 export fn wioScroll(self: *Window, x: f32, y: f32) void {
     if (x != 0) self.events.push(.{ .scroll_horizontal = x });
     if (y != 0) self.events.push(.{ .scroll_vertical = -y });
+}
+
+export fn wioDisplayLink(self: *DisplayLinkState, timestamp_s: f64, duration_s: f64) void {
+    const frame = wio.DisplayLinkFrame{
+        .timestamp_s = timestamp_s,
+        .duration_s = duration_s,
+    };
+    self.pending = frame;
+    self.window.events.push(.{ .display_link = frame });
 }
 
 export fn wioDupeClipboardText(allocator: *const std.mem.Allocator, bytes: [*:0]const u8, len: *usize) ?[*]u8 {
